@@ -24,6 +24,7 @@ class Node(Interval):
 class Inn:
     """
     args:
+    delta: weight shift value
     nodes: dict of {int layer num, [Node1, Node2, ...]}
     weights: dict of {(Node in prev layer, Node in this layer), Interval}.
     biases: dict of {Node, Interval}

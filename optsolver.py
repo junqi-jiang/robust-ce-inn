@@ -76,9 +76,9 @@ class OptSolver:
                         self.inn.weights[(node1, node)].get_bound(self.y_prime) * node_vars[i - 1][node1.index] for
                         node1 in self.inn.nodes[i - 1]) + node.get_bound(self.y_prime) == node_var[node.index])
                     if self.y_prime:
-                        self.model.addConstr(node_var[node.index] >= 0.5)
+                        self.model.addConstr(node_var[node.index] >= 0)
                     else:
-                        self.model.addConstr(node_var[node.index] > 0.5)
+                        self.model.addConstr(node_var[node.index] < 0)
                 self.model.update()
             node_vars[i] = node_var
             if i != (self.inn.num_layers - 1):

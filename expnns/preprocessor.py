@@ -1,17 +1,19 @@
 import copy
 import numpy as np
 import pandas as pd
-pd.options.display.max_columns = 100
-pd.options.display.max_rows = 150
 
 
-def min_max_scale(df, continuous, min_val=None, max_val=None):
+def min_max_scale(df, continuous, min_vals=None, max_vals=None):
     df_copy = copy.copy(df)
-    for name in continuous:
-        if min_val is None:
+    for i, name in enumerate(continuous):
+        if min_vals is None:
             min_val = np.min(df_copy[name])
-        if max_val is None:
+        else:
+            min_val = min_vals[i]
+        if max_vals is None:
             max_val = np.max(df_copy[name])
+        else:
+            max_val = max_vals[i]
         df_copy[name] = (df_copy[name] - min_val) / (max_val - min_val)
     return df_copy
 
@@ -39,7 +41,6 @@ class Preprocessor:
 
         enc = df.values[:, i]
         enc = enc[~np.isnan(enc)]   # to avoid nan bugs from pd
-        #print(len(enc), name, enc) ## debug
         encoded = np.zeros((len(enc), feat_num))
 
         if type == "ordinal":
@@ -61,15 +62,12 @@ class Preprocessor:
 
     def _encode_one_feature_discrete(self, enc, encoded):
         for loc, val in enumerate(enc):
-            #print(loc, val) ## debug
             encoded[int(loc), int(val)] = 1
         return encoded
 
     def encode_df(self, df):
         self.enc_cols = self.columns # reset encoded cols
         df_copy = copy.copy(df)
-        ## debug
-        #display(df_copy)
         for (i, name) in enumerate(self.columns):
             if name in self.ordinal:
                 df_copy, self.feature_var_map[i] = self._encode_one_feature(df_copy, name, self.ordinal[name],

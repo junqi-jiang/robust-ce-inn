@@ -1,5 +1,7 @@
 import pandas as pd
+import numpy as np
 from preprocessor import Preprocessor, min_max_scale
+
 
 feature_encodings_old = {'checking-status': {'A14': int(0), 'A11': int(1), 'A12': int(2), 'A13': int(3)},
                          'credit-history': {'A30': int(2), 'A31': int(4), 'A32': int(3), 'A33': int(0), 'A34': int(1)},
@@ -44,8 +46,9 @@ def load_old(path):
         df_old[name] = df_old[name] - 1
 
     # min max scale
-    df_old_mm = min_max_scale(df_old, continuous_features)
-
+    min_vals = np.min(df_old[continuous_features], axis=0)
+    max_vals = np.max(df_old[continuous_features], axis=0)
+    df_old_mm = min_max_scale(df_old, continuous_features, min_vals, max_vals)
     # encodings
     preprocessor_old = Preprocessor(ordinal_features, discrete_features, columns)
     df_old_enc = preprocessor_old.encode_df(df_old_mm)
@@ -65,10 +68,13 @@ def load_new(path):
         df_new[name] = df_new[name] - 1
 
     # min max scale
-    df_new_mm = min_max_scale(df_new, continuous_features)
+    min_vals = np.min(df_new[continuous_features], axis=0)
+    max_vals = np.max(df_new[continuous_features], axis=0)
+    df_new_mm = min_max_scale(df_new, continuous_features, min_vals, max_vals)
 
     # encodings
     preprocessor_new = Preprocessor(ordinal_features, discrete_features, columns)
-    df_old_enc = preprocessor_new.encode_df(df_new_mm)
+    df_new_enc = preprocessor_new.encode_df(df_new_mm)
+    df_new_enc = df_new_enc.dropna()
 
-    return df_new, df_new_mm, df_old_enc, preprocessor_new
+    return df_new, df_new_mm, df_new_enc, preprocessor_new

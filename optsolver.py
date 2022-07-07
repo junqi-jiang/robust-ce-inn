@@ -12,7 +12,7 @@ class OptSolver:
     def __init__(self, dataset, inn, y_prime):
         self.dataset = dataset
         self.inn = inn
-        self.y_prime = y_prime  # if 0, constraint: upper output node < 0.5, if 1, constraint: lower output node >= 0.5
+        self.y_prime = y_prime  # if 0, constraint: upper output node < 0, if 1, constraint: lower output node >= 0
         self.model = Model()  # initialise Gurobi optimisation model
 
     def add_input_variable_constraints(self):
@@ -67,14 +67,14 @@ class OptSolver:
                     self.model.update()
                     self.model.addConstr(aux_var[node.index] == quicksum(
                         self.inn.weights[(node1, node)].get_bound(self.y_prime) * node_vars[i - 1][node1.index] for
-                        node1 in self.inn.nodes[i - 1]) + node.get_bound(self.y_prime) == aux_var[node.index])
+                        node1 in self.inn.nodes[i - 1]) + node.get_bound(self.y_prime)) ### CHECK: +B is wrong
                     self.model.addConstr(node_var[node.index] == max_(0, aux_var[node.index]))
 
                 # add output constraint
                 else:
                     self.model.addConstr(aux_var[node.index] == quicksum(
                         self.inn.weights[(node1, node)].get_bound(self.y_prime) * node_vars[i - 1][node1.index] for
-                        node1 in self.inn.nodes[i - 1]) + node.get_bound(self.y_prime) == node_var[node.index])
+                        node1 in self.inn.nodes[i - 1]) + node.get_bound(self.y_prime))
                     if self.y_prime:
                         self.model.addConstr(node_var[node.index] >= 0)
                     else:

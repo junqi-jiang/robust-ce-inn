@@ -1,7 +1,8 @@
 
 
 class Interval:
-    def __init__(self, lb=0, ub=0):
+    def __init__(self, value, lb=0, ub=0):
+        self.value = value
         self.lb = lb
         self.ub = ub
 
@@ -13,6 +14,7 @@ class Interval:
         return self.lb if y_prime is 1 else self.ub
 
 
+### CHECK: Doesn't hurt, BUT SHOULD NODE BE A SUBCLASS OF INTERVAL???
 class Node(Interval):
     def __init__(self, layer, index, lb=0, ub=0):
         super().__init__(lb, ub)
@@ -29,9 +31,10 @@ class Inn:
     weights: dict of {(Node in prev layer, Node in this layer), Interval}.
     biases: dict of {Node, Interval}
     """
-    def __init__(self, num_layers, delta):
+    def __init__(self, num_layers, delta, nodes, weights, biases):
         self.num_layers = num_layers
         self.delta = delta
         self.nodes = dict()
         self.weights = dict()
         self.biases = dict()
+

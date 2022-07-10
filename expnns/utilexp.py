@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.neural_network import MLPClassifier
 from inn import *
+from dataset import DataType
 
 
 # util
@@ -161,7 +162,7 @@ def build_inn_nodes(clf, num_layers):
             if isinstance(clf.hidden_layer_sizes, int):
                 num_nodes_i = clf.hidden_layer_sizes
             else:
-                num_nodes_i = clf.hidden_layer_sizes[i-1]
+                num_nodes_i = clf.hidden_layer_sizes[i - 1]
 
         for j in range(num_nodes_i):
             this_layer_nodes.append(Node(i, j))
@@ -174,13 +175,22 @@ def build_inn_weights_biases(clf, num_layers, delta, nodes):
     bs = clf.intercepts_
     weights = dict()
     biases = dict()
-    for i in range(num_layers-1):
+    for i in range(num_layers - 1):
         for node_from in nodes[i]:
-            for node_to in nodes[i+1]:
+            for node_to in nodes[i + 1]:
                 w_val = ws[i][node_from.index][node_to.index]
-                weights[(node_from, node_to)] = Interval(w_val, w_val-delta, w_val+delta)
-                if i != 0:
-                    b_val = bs[i-1][node_to.index]
-                    biases[node_to] = Interval(b_val, b_val-delta, b_val+delta)
+                weights[(node_from, node_to)] = Interval(w_val, w_val - delta, w_val + delta)
+                b_val = bs[i][node_to.index]
+                biases[node_to] = Interval(b_val, b_val - delta, b_val + delta)
     return weights, biases
 
+
+def build_dataset_feature_types(columns, ordinal, discrete, continuous):
+    feature_types = dict()
+    for feat in ordinal.keys():
+        feature_types[columns.index(feat)] = DataType.ORDINAL
+    for feat in discrete.keys():
+        feature_types[columns.index(feat)] = DataType.DISCRETE
+    for feat in continuous:
+        feature_types[columns.index(feat)] = DataType.CONTINUOUS_REAL
+    return feature_types

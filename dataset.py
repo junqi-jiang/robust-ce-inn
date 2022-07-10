@@ -18,8 +18,8 @@ class Dataset:
         feat_var_map: dict of {(int) feature index, [corresponding variable indices]}
 
     """
-    def __init__(self, num_features, data, feature_types, feat_var_map):
+    def __init__(self, num_features, num_var, feature_types, feat_var_map):
         self.num_features = num_features
-        self.num_variables = data.shape[1]
+        self.num_variables = num_var
         self.feature_types = feature_types
         self.feat_var_map = feat_var_map

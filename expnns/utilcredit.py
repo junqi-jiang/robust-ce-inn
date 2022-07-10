@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from preprocessor import Preprocessor, min_max_scale
 
-
 feature_encodings_old = {'checking-status': {'A14': int(0), 'A11': int(1), 'A12': int(2), 'A13': int(3)},
                          'credit-history': {'A30': int(2), 'A31': int(4), 'A32': int(3), 'A33': int(0), 'A34': int(1)},
                          'purpose': {'A410': int(0), 'A41': int(2), 'A42': int(3), 'A43': int(4), 'A44': int(5),

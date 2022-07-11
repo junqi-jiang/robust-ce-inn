@@ -32,16 +32,15 @@ class OptSolver:
                 prev_var = None
                 for i, var_idx in enumerate(self.dataset.feat_var_map[feat_idx]):
                     node_var[var_idx] = self.model.addVar(vtype=GRB.BINARY, name='x_ord_0_' + str(var_idx))
-                    if i == 0:
-                        prev_var = node_var[var_idx]
-                        continue
                     self.model.update()
-                    self.model.addConstr(prev_var >= node_var[var_idx])
+                    if i != 0:
+                        self.model.addConstr(prev_var >= node_var[var_idx])
+                    prev_var = node_var[var_idx]
 
             if self.dataset.feature_types[feat_idx] == DataType.CONTINUOUS_REAL:
                 var_idx = self.dataset.feat_var_map[feat_idx][0]
-                node_var[var_idx] = self.model.addVar(lb=0, ub=1, vtype=GRB.SEMICONT, name="x_cont_0" + str(var_idx))
-                self.model.update()
+                node_var[var_idx] = self.model.addVar(lb=0, ub=1, vtype=GRB.CONTINUOUS, name="x_cont_0" + str(var_idx))
+
             self.model.update()
         return node_var
 
@@ -68,8 +67,9 @@ class OptSolver:
                                                             name='a_' + str(node))
                     self.model.update()
                     # node1 are nodes in prev layer
+                    # CHECK THIS SUM HERE, NODE_VARS[I] IS A DICT ----------> THIS IS CORRECT!
                     self.model.addConstr(aux_var[node.index] == quicksum(
-                        self.inn.weights[(node1, node)].get_bound(self.y_prime) * node_vars[i - 1][node1.index] for
+                        (self.inn.weights[(node1, node)].get_bound(self.y_prime) * node_vars[i - 1][node1.index]) for
                         node1 in self.inn.nodes[i - 1]) + self.inn.biases[node].get_bound(self.y_prime),
                                          name="forward_pass_node_" + str(node))
                     self.model.addConstr(node_var[node.index] == max_(0, aux_var[node.index]),
@@ -78,7 +78,7 @@ class OptSolver:
                 # add output constraint
                 else:
                     self.model.addConstr(node_var[node.index] == quicksum(
-                        self.inn.weights[(node1, node)].get_bound(self.y_prime) * node_vars[i - 1][node1.index] for
+                        (self.inn.weights[(node1, node)].get_bound(self.y_prime) * node_vars[i - 1][node1.index]) for
                         node1 in self.inn.nodes[i - 1]) + self.inn.biases[node].get_bound(self.y_prime),
                                          name="forward_pass_output_node_" + str(node))
                     if self.y_prime:
@@ -92,19 +92,27 @@ class OptSolver:
         return node_vars, aux_vars
 
     def create_constraints(self):
-        node_vars = dict()  # dict of {layer number, {Node idx, Gurobi variable obj}}
-        aux_vars = dict()  # dict of {layer number, {Node idx, Gurobi variable obj}}
+        node_vars = dict()  # dict of {layer number, {Node's idx int, Gurobi variable obj}}
+        aux_vars = dict()  # dict of {layer number, {Node's idx int, Gurobi variable obj}}
         node_vars[0] = self.add_input_variable_constraints()
         node_vars, aux_vars = self.add_node_variables_constraints(node_vars, aux_vars)
         return node_vars, aux_vars
 
+    def set_objective(self, node_vars):
+        obj_vars = []
+        for idx in node_vars[0].keys():
+            this_obj_var = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, ub=1, name=f"obj_x_{idx}")
+            self.model.update()
+            self.model.addConstr(this_obj_var >= (self.x[idx] - node_vars[0][idx]))
+            self.model.addConstr(this_obj_var >= (node_vars[0][idx] - self.x[idx]))
+            self.model.update()
+            obj_vars.append(this_obj_var)
+        self.model.setObjective(quicksum(obj_vars), GRB.MINIMIZE)
+        self.model.update()
+
     def compute(self):
         node_vars, aux_vars = self.create_constraints()
-        inputs = []
-        for key in node_vars[0].keys():
-            inputs.append(node_vars[0][key])
-        self.model.setObjective(quicksum(inputs-self.x), GRB.MINIMIZE)
-        self.model.update()
+        self.set_objective(node_vars)
         self.model.optimize()
         for v in self.model.getVars():
             print(v.varName, v.getAttr(GRB.Attr.X))

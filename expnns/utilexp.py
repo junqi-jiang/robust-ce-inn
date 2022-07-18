@@ -179,7 +179,7 @@ def build_inn_weights_biases(clf, num_layers, delta, nodes):
         for node_from in nodes[i]:
             for node_to in nodes[i + 1]:
                 # round by 4 decimals
-                w_val = round(ws[i][node_from.index][node_to.index], 4)
+                w_val = round(ws[i][node_from.index][node_to.index], 3)
                 weights[(node_from, node_to)] = Interval(w_val, w_val - delta, w_val + delta)
                 b_val = round(bs[i][node_to.index], 4)
                 biases[node_to] = Interval(b_val, b_val - delta, b_val + delta)

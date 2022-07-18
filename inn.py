@@ -24,6 +24,7 @@ class Node(Interval):
     def __str__(self):
         return str(self.loc)
 
+
 class Inn:
     """
     args:

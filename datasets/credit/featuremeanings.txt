@@ -1,0 +1,114 @@
+Feature meaning TRUE encodings as in the experiments. 
+New Version Dataset
+
+
+laufkont = status
+0 : no checking account
+1 : ... < 0 DM
+2 : 0<= ... < 200 DM
+3 : ... >= 200 DM / salary for at least 1 year
+
+laufzeit = duration
+
+moral = credit_history
+0 : delay in paying off in the past
+1 : critical account/other credits elsewhere
+2 : no credits taken/all credits paid back duly 
+3 : existing credits paid back duly till now
+4 : all credits at this bank paid back duly
+
+verw = purpose 
+0 : others
+1 : car (new)
+2 : car (used)
+3 : furniture/equipment 
+4 : radio/television
+5 : domestic appliances 
+6 : repairs
+7 : education
+8 : vacation
+9 : retraining
+10 : business
+
+
+hoehe = amount
+
+
+sparkont = savings
+0 : unknown/no savings account 
+1 : ... < 100 DM
+2 : 100 <= ... < 500 DM
+3 : 500 <= ... < 1000 DM
+4 : ... >= 1000 DM
+
+beszeit = employment_duration
+0 : unemployed
+1 : < 1 yr
+2 : 1 <= ... < 4 yrs 4 : 4 <= ... < 7 yrs 5 : >= 7 yrs
+
+rate = installment_rate
+0 : >= 35
+1 : 25 <= ... < 35 
+2 : 20 <= ... < 25 
+3 : < 20
+
+famges = personal_status_sex
+0 : male : divorced/separated
+1 : female : non-single or male : single 
+2 : male : married/widowed
+3 : female : single
+
+buerge = other_debtors
+0 : none
+1 : co-applicant
+2 : guarantor
+
+wohnzeit = present_residence
+0 : < 1 yr
+1 : 1 <= ... < 4 yrs 
+2 : 4 <= ... < 7 yrs 
+3 : >= 7 yrs
+
+verm = property
+0 : unknown / no property
+1 : car or other
+2 : building soc. savings agr./life insurance 
+3 : real estate
+
+alter = age
+
+weitkred = other_installment_plans
+0 : bank
+1 : stores 
+2 : none
+
+wohn = housing
+0 : for free 
+1 : rent
+2 : own
+
+bishkred = number_credits 
+0 : 1
+1 : 2-3 
+2 : 4-5 
+3 : >= 6
+
+beruf = job
+0 : unemployed/unskilled - non-resident
+1 : unskilled - resident
+2 : skilled employee/official
+3 : manager/self-empl./highly qualif. employee
+
+pers = people_liable
+0 : 3 or more 
+1 : 0 to 2
+
+telef = telephone
+0 : no
+1 : yes (under customer name)
+
+gastarb = foreign_worker 
+0 : yes 
+1 : no
+
+kredit (target column) = credit_risk 0 : bad 1 : good

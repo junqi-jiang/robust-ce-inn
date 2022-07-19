@@ -15,7 +15,8 @@ class OptSolver:
         self.y_prime = y_prime  # if 0, constraint: upper output node < 0, if 1, constraint: lower output node >= 0
         self.x = x  # explainee instance x
         self.model = Model()  # initialise Gurobi optimisation model
-        self.x_prime = None    # counterfactual instance
+        self.x_prime = None  # counterfactual instance
+        self.eps = 0.0001
 
     def add_input_variable_constraints(self):
         node_var = dict()
@@ -59,7 +60,6 @@ class OptSolver:
         a = WX+B
         n = max{a, 0}
         """
-        eps = 0.0001
         for i in range(1, self.inn.num_layers):
             node_var = dict()
             aux_var = dict()
@@ -90,9 +90,9 @@ class OptSolver:
                                          name="forward_pass_output_node_" + str(node))
                     # add robust constraint:
                     if self.y_prime:
-                        self.model.addConstr(node_var[node.index] - eps >= 0.0, name="output_node_lb_>=0")
+                        self.model.addConstr(node_var[node.index] - self.eps >= 0.0, name="output_node_lb_>=0")
                     else:
-                        self.model.addConstr(node_var[node.index] + eps <= 0.0, name="output_node_ub_<0")
+                        self.model.addConstr(node_var[node.index] + self.eps <= 0.0, name="output_node_ub_<0")
                     self.model.update()
             node_vars[i] = node_var
             if i != (self.inn.num_layers - 1):
@@ -118,13 +118,72 @@ class OptSolver:
         self.model.setObjective(quicksum(obj_vars), GRB.MINIMIZE)
         self.model.update()
 
+    def set_objective_l1_l0(self, node_vars):
+        obj_vars_l1 = []  # each is l1 distance for 1 feature
+        obj_vars_l0 = []  # each is l0 distance for 1 feature
+        for feat_idx in range(self.dataset.num_features):
+            self.model.update()
+            this_obj_var_l1 = self.model.addVar(vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, name=f"objl1_feat_{feat_idx}")
+            this_obj_var_l0 = self.model.addVar(vtype=GRB.BINARY, name=f"objl0_feat_{feat_idx}")
+            var_idxs = self.dataset.feat_var_map[feat_idx]
+
+            if self.dataset.feature_types[feat_idx] == DataType.DISCRETE:
+                to_max = dict()
+                for var_idx in var_idxs:
+                    to_max[var_idx] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY,
+                                                        name=f"objl1_feat_disc_{var_idx}")
+                    self.model.update()
+                    self.model.addConstr(to_max[var_idx] >= (node_vars[0][var_idx] - self.x[var_idx]),
+                                         name=f"objl1_feat_disc_{var_idx}_>=-")
+                    self.model.addConstr(to_max[var_idx] >= (self.x[var_idx] - node_vars[0][var_idx]),
+                                         name=f"objl1_feat_disc_{var_idx}_>=+")     # for abs()
+                    self.model.update()
+                self.model.addConstr(this_obj_var_l1 == max_([to_max[idx] for idx in to_max.keys()]),
+                                     name=f"objl1_feat_{feat_idx}")
+                self.model.addConstr((this_obj_var_l0 == 0) >> (this_obj_var_l1 <= self.eps),
+                                     name=f"objl0_feat_{feat_idx}")  # if l1<= 0, l0=0
+
+            if self.dataset.feature_types[feat_idx] == DataType.ORDINAL:
+                self.model.addConstr(this_obj_var_l1 >= (
+                            quicksum([node_vars[0][idx] for idx in var_idxs]) - np.sum(self.x[var_idxs])) / (
+                                                 len(var_idxs) - 1), name=f"objl1_feat_{feat_idx}_>=-")
+                self.model.addConstr(this_obj_var_l1 >= (
+                            np.sum(self.x[var_idxs]) - quicksum([node_vars[0][idx] for idx in var_idxs])) / (
+                                             len(var_idxs) - 1), name=f"objl1_feat_{feat_idx}_>=+")     # for abs()
+                self.model.addConstr((this_obj_var_l0 == 0) >> (this_obj_var_l1 <= self.eps),
+                                     name=f"objl0_feat_{feat_idx}")
+
+            if self.dataset.feature_types[feat_idx] == DataType.CONTINUOUS_REAL:
+                self.model.addConstr(
+                    this_obj_var_l1 >= (quicksum([node_vars[0][idx] for idx in var_idxs]) - np.sum(self.x[var_idxs])),
+                    name=f"objl1_feat_{feat_idx}_>=-")
+                self.model.addConstr(
+                    this_obj_var_l1 >= (np.sum(self.x[var_idxs]) - quicksum([node_vars[0][idx] for idx in var_idxs])),
+                    name=f"objl1_feat_{feat_idx}_>=+")      # for abs()
+                self.model.addConstr((this_obj_var_l0 == 0) >> (this_obj_var_l1 <= self.eps),
+                                     name=f"objl0_feat_{feat_idx}")
+
+            obj_vars_l1.append(this_obj_var_l1)
+            obj_vars_l0.append(this_obj_var_l0)
+
+        self.model.setObjective(
+            quicksum(obj_vars_l1) / self.dataset.num_features + quicksum(obj_vars_l0) / self.dataset.num_features,
+            GRB.MINIMIZE)
+
     def compute(self):
         node_vars, aux_vars = self.create_constraints()
-        self.set_objective(node_vars)
+        self.set_objective_l1_l0(node_vars)
+        self.model.Params.LogToConsole = 0  # disable console output
         self.model.optimize()
         xp = []
-        for v in self.model.getVars():
-            if 'x_' in v.varName:
-                xp.append(v.getAttr(GRB.Attr.X))
-        self.x_prime = np.array(xp)
-        return self.x_prime
+        try:
+            for v in self.model.getVars():
+                if 'x_' in v.varName:
+                    xp.append(v.getAttr(GRB.Attr.X))
+            self.x_prime = np.array(xp)
+        except AttributeError:
+            xp = None
+        if xp is not None:
+            return self.x_prime
+        else:
+            return None

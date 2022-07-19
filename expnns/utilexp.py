@@ -195,3 +195,39 @@ def build_dataset_feature_types(columns, ordinal, discrete, continuous):
     for feat in continuous:
         feature_types[columns.index(feat)] = DataType.CONTINUOUS_REAL
     return feature_types
+
+
+def normalised_l1(xp, x, dataset):
+    """
+    function to calculate normalised L1 between two flat arrays
+    :param xp: flat np array of shape (num_vars,)
+    :param x: flat np array of shape (num_vars,)
+    :param dataset: instance of class Dataset
+    :return: float number
+    """
+    dist = 0
+    for feat_idx in range(dataset.num_features):
+        var_idx = dataset.feat_var_map[feat_idx]
+        # discrete: not the same -> 1
+        if dataset.feature_types[feat_idx] == DataType.DISCRETE:
+            dist += np.max(np.abs(xp[var_idx] - x[var_idx]))
+        # ordinal: |sum(xpi) - sum(xi)| / (k-1), where k is number of possible values
+        if dataset.feature_types[feat_idx] == DataType.ORDINAL:
+            dist += np.abs(np.sum(xp[var_idx]) - np.sum(x[var_idx])) / (len(var_idx) - 1)
+        # continuous: |xpi - xi|/(ubi-lbi) <==> |xpi - xi|, because (ub-lb)=1
+        if dataset.feature_types[feat_idx] == DataType.CONTINUOUS_REAL:
+            dist += np.abs(np.sum(xp[var_idx]) - np.sum(x[var_idx]))
+    return round(dist/dataset.num_features, 3)
+
+
+def normalised_l0(xp, x, dataset):
+    dist = 0
+    for feat_idx in range(dataset.num_features):
+        var_idx = dataset.feat_var_map[feat_idx]
+        if dataset.feature_types[feat_idx] == DataType.DISCRETE:
+            if np.max(np.abs(xp[var_idx] - x[var_idx])) >= 0.0001:
+                dist += 1
+        else:
+            if np.abs(np.sum(xp[var_idx]) - np.sum(x[var_idx])) >= 0.0001:
+                dist += 1
+    return round(dist/dataset.num_features, 3)

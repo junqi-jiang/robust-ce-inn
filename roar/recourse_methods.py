@@ -192,7 +192,7 @@ class RobustRecourse():
         return x_new.detach().numpy(), np.concatenate((delta_W.detach().numpy(), delta_W0.detach().numpy()))
 
     # Heuristic for picking hyperparam lambda
-    def choose_lambda(self, recourse_needed_X, predict_fn, X_train=None, predict_proba_fn=None):
+    def choose_lambda(self, recourse_needed_X, predict_fn, X_train=None, predict_proba_fn=None, cat_feats=None, labels=(1,)):
         lambdas = np.arange(0.1, 1.1, 0.1)
 
         v_old = 0
@@ -206,7 +206,7 @@ class RobustRecourse():
                     # set seed for lime
                     np.random.seed(xi)
                     coefficients, intercept = lime_explanation(predict_proba_fn,
-                                                               X_train, x)
+                                                               X_train, x, cat_feats=cat_feats, labels=labels)
                     coefficients, intercept = np.round_(coefficients, 4), np.round_(intercept, 4)
                     self.set_W(coefficients)
                     self.set_W0(intercept)

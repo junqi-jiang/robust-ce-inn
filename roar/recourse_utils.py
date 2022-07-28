@@ -60,7 +60,7 @@ def pfc_cost(xs, rs, feature_costs):
 
 
 # LIME wrapper for non-linear base models
-def lime_explanation(model_pred_proba, X_train, x, cat_feats=None):
+def lime_explanation(model_pred_proba, X_train, x, cat_feats=None, labels=(1,)):
     explainer = lime.lime_tabular.LimeTabularExplainer(training_data=X_train,
                                                        categorical_features=cat_feats,
                                                        discretize_continuous=False,
@@ -68,14 +68,14 @@ def lime_explanation(model_pred_proba, X_train, x, cat_feats=None):
     exp = explainer.explain_instance(x,
                                      model_pred_proba,
                                      num_features=X_train.shape[1],
-                                     model_regressor=LogisticRegression(),
-                                     num_samples=20000,
-                                     labels=(0,))
-    coefficients = exp.local_exp[0][0][1]
-    #coefficients = exp.local_exp[1][0][1]
+                                     model_regressor=LogisticRegression(),labels=labels)
+                                     #num_samples=20000,
+                                     #labels=(1,))
+    #coefficients = exp.local_exp[0][0][1]
+    coefficients = exp.local_exp[labels[0]][0][1]
     # the first key should be 1 if we are using lime to approximate the clf's behaviours for predicting label 1
-    #intercept = exp.intercept[1]
-    intercept = exp.intercept[0]
+    intercept = exp.intercept[labels[0]]
+    #intercept = exp.intercept[0]
     return coefficients, intercept
 
 

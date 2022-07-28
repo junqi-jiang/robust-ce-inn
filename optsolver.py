@@ -9,14 +9,14 @@ import numpy as np
 
 
 class OptSolver:
-    def __init__(self, dataset, inn, y_prime, x):
+    def __init__(self, dataset, inn, y_prime, x, eps=0.0001):
         self.dataset = dataset
         self.inn = inn
         self.y_prime = y_prime  # if 0, constraint: upper output node < 0, if 1, constraint: lower output node >= 0
         self.x = x  # explainee instance x
         self.model = Model()  # initialise Gurobi optimisation model
         self.x_prime = None  # counterfactual instance
-        self.eps = 0.0001
+        self.eps = eps
 
     def add_input_variable_constraints(self):
         node_var = dict()
@@ -88,7 +88,7 @@ class OptSolver:
                         (self.inn.weights[(node1, node)].get_bound(self.y_prime) * node_vars[i - 1][node1.index]) for
                         node1 in self.inn.nodes[i - 1]) + self.inn.biases[node].get_bound(self.y_prime),
                                          name="forward_pass_output_node_" + str(node))
-                    # add robust constraint:
+                    # add robust counterfactual constraint:
                     if self.y_prime:
                         self.model.addConstr(node_var[node.index] - self.eps >= 0.0, name="output_node_lb_>=0")
                     else:
@@ -166,9 +166,11 @@ class OptSolver:
             obj_vars_l1.append(this_obj_var_l1)
             obj_vars_l0.append(this_obj_var_l0)
 
-        self.model.setObjective(
-            quicksum(obj_vars_l1) / self.dataset.num_features + quicksum(obj_vars_l0) / self.dataset.num_features,
-            GRB.MINIMIZE)
+        #self.model.setObjective(
+        #    quicksum(obj_vars_l1) / self.dataset.num_features + quicksum(obj_vars_l0) / self.dataset.num_features,
+        #    GRB.MINIMIZE)
+        self.model.setObjective(quicksum(obj_vars_l1) / self.dataset.num_features, GRB.MINIMIZE)    # only L1
+        self.model.update()
 
     def compute(self):
         node_vars, aux_vars = self.create_constraints()
@@ -181,7 +183,7 @@ class OptSolver:
                 if 'x_' in v.varName:
                     xp.append(v.getAttr(GRB.Attr.X))
             self.x_prime = np.array(xp)
-        except AttributeError:
+        except:
             xp = None
         if xp is not None:
             return self.x_prime

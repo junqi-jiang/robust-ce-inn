@@ -289,7 +289,7 @@ class HiddenPrints:
 
 class UtilExp:
     def __init__(self, clf, X1, y1, X2, y2, columns, ordinal_features, discrete_features, continuous_features,
-                 feature_var_map):
+                 feature_var_map, gap=0.1, desired_class=1):
         self.clf = clf
         self.X1 = X1
         self.y1 = y1
@@ -300,6 +300,8 @@ class UtilExp:
         self.discrete_features = discrete_features
         self.continuous_features = continuous_features
         self.feat_var_map = feature_var_map
+        # =1 (0) will select test instances with classification result 0 (1), =-1 will randomly select test instances
+        self.desired_class = desired_class
 
         self.dataset = None
         self.delta_min = -1
@@ -313,7 +315,7 @@ class UtilExp:
         # load util
         self.build_dataset_obj()
         self.build_lof()
-        self.build_Mplus_Mminus()
+        self.build_Mplus_Mminus(gap)
         self.build_Mmax()
         self.build_test_instances()
 
@@ -326,11 +328,11 @@ class UtilExp:
         self.lof = LocalOutlierFactor(n_neighbors=20, novelty=True)
         self.lof.fit(self.X1.values)
 
-    def build_delta_min(self):
+    def build_delta_min(self, gap):
         wb_orig = get_flattened_weight_and_bias(self.clf)
         for i in range(5):
             np.random.seed(i)
-            idxs = np.random.choice(range(len(self.X2.values)), int(0.1 * len(self.X2.values)))
+            idxs = np.random.choice(range(len(self.X2.values)), int(gap * len(self.X2.values)))
             this_clf = copy.deepcopy(self.clf)
             this_clf.partial_fit(self.X2.values[idxs], self.y2.values[idxs])
             this_wb = get_flattened_weight_and_bias(this_clf)
@@ -338,8 +340,8 @@ class UtilExp:
             if this_delta >= self.delta_min:
                 self.delta_min = this_delta
 
-    def build_Mplus_Mminus(self):
-        self.build_delta_min()
+    def build_Mplus_Mminus(self, gap):
+        self.build_delta_min(gap)
         self.Mplus, self.Mminus = build_delta_extreme_shifted_models(self.clf, self.delta_min)
 
     def build_Mmax(self):
@@ -350,9 +352,14 @@ class UtilExp:
         self.delta_max = inf_norm(wb_max, wb_orig)
 
     def build_test_instances(self):
-        random_idx = np.where(self.clf.predict(self.X1.values) == 0)[0]
-        random_idx = np.random.choice(random_idx, 50)
-        assert np.sum(self.clf.predict(self.X1.values[random_idx])) == 0
+        if self.desired_class >= 0:
+            if self.desired_class == 1:
+                random_idx = np.where(self.clf.predict(self.X1.values) == 0)[0]
+            else:
+                random_idx = np.where(self.clf.predict(self.X1.values) == 1)[0]
+            random_idx = np.random.choice(random_idx, 50)
+        else:
+            random_idx = np.random.randint(len(self.X1.values) - 1, size=(50,))
         self.test_instances = self.X1.values[random_idx]
 
     def evaluate_one(self, this_cf, x):
@@ -376,6 +383,13 @@ class UtilExp:
                 m2_valid += 1
         return found_valid, cf_valid, delta_valid, m2_valid, l1s, l0s, lofs
 
+    def run_ours_custom_delta(self, delta, eps):
+        return self.run_ours_delta(delta, eps)
+
+    def run_ours_max_robust(self, eps):
+        delta = round(self.delta_max * 1.02, 4)
+        return self.run_ours_delta(delta, eps)
+
     def run_ours_robust(self, eps):
         delta = round(self.delta_min * 1.02, 4)
         return self.run_ours_delta(delta, eps)
@@ -395,9 +409,10 @@ class UtilExp:
         found_valids, cf_valids, delta_valids, m2_valids, l1ss, l0ss, lofss = 0, 0, 0, 0, 0, 0, 0
 
         for i, x in tqdm(enumerate(self.test_instances)):
-            y_prime = 1
+            y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
             this_solver = OptSolver(dataset, inn, y_prime, x, eps=eps)
             this_cf = this_solver.compute()
+            this_cf = np.round(this_cf, 4)
             CEs.append(this_cf)
             if this_cf is not None:
                 found_valid, cf_valid, delta_valid, m2_valid, l1s, l0s, lofs = self.evaluate_one(this_cf, x)
@@ -408,10 +423,11 @@ class UtilExp:
                 l1ss += l1s
                 l0ss += l0s
                 lofss += lofs
+        print("found:", found_valids / len(self.test_instances))
         print("average normalised L1:", l1ss / cf_valids)
         print("average normalised L0:", l0ss / cf_valids)
         print("average lof score:", lofss / cf_valids)
-        print("found:", found_valids / len(self.test_instances))
+
         print("counterfactual validity:", cf_valids / len(self.test_instances))
         print("delta validity:", delta_valids / len(self.test_instances))
         print("m2 validity:", m2_valids / len(self.test_instances))

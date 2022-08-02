@@ -291,6 +291,7 @@ class UtilExp:
     def __init__(self, clf, X1, y1, X2, y2, columns, ordinal_features, discrete_features, continuous_features,
                  feature_var_map, gap=0.1, desired_class=1):
         self.clf = clf
+        self.num_layers = get_clf_num_layers(clf)
         self.X1 = X1
         self.y1 = y1
         self.X2 = X2
@@ -311,6 +312,8 @@ class UtilExp:
         self.delta_max = 0  # inf-d(clf, Mmax)
         self.lof = None
         self.test_instances = None
+        self.inn_delta_non_0 = None
+        self.inn_delta_0 = None
 
         # load util
         self.build_dataset_obj()
@@ -318,6 +321,7 @@ class UtilExp:
         self.build_Mplus_Mminus(gap)
         self.build_Mmax()
         self.build_test_instances()
+        self.build_inns()
 
     def build_dataset_obj(self):
         self.dataset = Dataset(len(self.columns) - 1, self.clf.n_features_in_,
@@ -362,6 +366,50 @@ class UtilExp:
             random_idx = np.random.randint(len(self.X1.values) - 1, size=(50,))
         self.test_instances = self.X1.values[random_idx]
 
+    def build_inns(self):
+        delta = self.delta_min
+        nodes = build_inn_nodes(self.clf, self.num_layers)
+        weights, biases = build_inn_weights_biases(self.clf, self.num_layers, delta, nodes)
+        self.inn_delta_non_0 = Inn(self.num_layers, delta, nodes, weights, biases)
+        delta = 0
+        weights_0, biases_0 = build_inn_weights_biases(self.clf, self.num_layers, delta, nodes)
+        self.inn_delta_0 = Inn(self.num_layers, delta, nodes, weights_0, biases_0)
+
+    def is_robust_raw(self, x, cf):
+        y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
+        this_solver = OptSolver(self.dataset, self.inn_delta_non_0, y_prime, x, mode=1, M=10000, x_prime=cf)
+        found, bound = this_solver.compute_inn_bounds()
+        return found, bound
+
+    def is_robust(self, x, cf):
+        """
+        run robustness test for delta=delta_min:
+        y'=1, lb(INN) >= 0 <---> robust
+        y'=0, ub(INN) <= 0 <---> robust
+        :param x: x, (n features,)
+        :param cf: cf, (n features,)
+        :return: boolean
+        """
+        y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
+        this_solver = OptSolver(self.dataset, self.inn_delta_non_0, y_prime, x, mode=1, M=10000, x_prime=cf)
+        found, bound = this_solver.compute_inn_bounds()
+        if found == 1:
+            return True
+        else:
+            return False
+
+    def is_robust_custom_delta(self, x, cf, delta):
+        nodes = build_inn_nodes(self.clf, self.num_layers)
+        weights, biases = build_inn_weights_biases(self.clf, self.num_layers, delta, nodes)
+        inn = Inn(self.num_layers, delta, nodes, weights, biases)
+        y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
+        this_solver = OptSolver(self.dataset, inn, y_prime, x, mode=1, M=10000, x_prime=cf)
+        found, bound = this_solver.compute_inn_bounds()
+        if found == 1:
+            return True
+        else:
+            return False
+
     def evaluate_one(self, this_cf, x):
         # function for calculating evaluation metrics for one **non-null** counterfactual instance
         found_valid, cf_valid, delta_valid, m2_valid, l1s, l0s, lofs = 0, 0, 0, 0, 0, 0, 0
@@ -372,10 +420,7 @@ class UtilExp:
                 l1s += normalised_l1_all(this_cf, x)
                 l0s += normalised_l0(this_cf, x, self.dataset)
                 lofs += self.lof.predict(this_cf.reshape(1, -1))[0]
-            if self.clf.predict(this_cf.reshape(1, -1))[0] != self.clf.predict(x.reshape(1, -1))[0] and \
-                    self.Mplus.predict(
-                        this_cf.reshape(1, -1))[0] != self.clf.predict(x.reshape(1, -1))[0] and self.Mminus.predict(
-                this_cf.reshape(1, -1))[0] != self.clf.predict(x.reshape(1, -1))[0]:
+            if self.is_robust(x, this_cf):
                 delta_valid += 1
             if self.clf.predict(this_cf.reshape(1, -1))[0] != self.clf.predict(x.reshape(1, -1))[0] and \
                     self.Mmax.predict(
@@ -383,37 +428,10 @@ class UtilExp:
                 m2_valid += 1
         return found_valid, cf_valid, delta_valid, m2_valid, l1s, l0s, lofs
 
-    def run_ours_custom_delta(self, delta, eps):
-        return self.run_ours_delta(delta, eps)
-
-    def run_ours_max_robust(self, eps):
-        delta = round(self.delta_max * 1.02, 4)
-        return self.run_ours_delta(delta, eps)
-
-    def run_ours_robust(self, eps):
-        delta = round(self.delta_min * 1.02, 4)
-        return self.run_ours_delta(delta, eps)
-
-    def run_ours_non_robust(self, eps):
-        return self.run_ours_delta(0, eps)
-
-    def run_ours_delta(self, delta, eps):
-        start_time = time.time()
-        CEs = []
-        num_layers = get_clf_num_layers(self.clf)
-        nodes = build_inn_nodes(self.clf, num_layers)
-        weights, biases = build_inn_weights_biases(self.clf, num_layers, delta, nodes)
-        inn = Inn(num_layers, delta, nodes, weights, biases)
-        dataset = self.dataset
-
+    def evaluate_ces(self, cf):
         found_valids, cf_valids, delta_valids, m2_valids, l1ss, l0ss, lofss = 0, 0, 0, 0, 0, 0, 0
-
-        for i, x in tqdm(enumerate(self.test_instances)):
-            y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
-            this_solver = OptSolver(dataset, inn, y_prime, x, eps=eps)
-            this_cf = this_solver.compute()
-            this_cf = np.round(this_cf, 4)
-            CEs.append(this_cf)
+        for i, this_cf in enumerate(cf):
+            x = self.test_instances[i]
             if this_cf is not None:
                 found_valid, cf_valid, delta_valid, m2_valid, l1s, l0s, lofs = self.evaluate_one(this_cf, x)
                 found_valids += found_valid
@@ -427,14 +445,62 @@ class UtilExp:
         print("average normalised L1:", l1ss / cf_valids)
         print("average normalised L0:", l0ss / cf_valids)
         print("average lof score:", lofss / cf_valids)
-
         print("counterfactual validity:", cf_valids / len(self.test_instances))
         print("delta validity:", delta_valids / len(self.test_instances))
         print("m2 validity:", m2_valids / len(self.test_instances))
+
+    def run_ours_custom_delta(self, delta):
+        return self.run_ours(robust=True, delta=delta)
+
+    def run_ours_max_robust(self):
+        delta = round(self.delta_max * 1.02, 4)
+        return self.run_ours(robust=True, delta=delta)
+
+    def run_ours_robust(self):
+        return self.run_ours(robust=True, delta=None)
+
+    def run_ours_non_robust(self):
+        return self.run_ours(robust=False, delta=None)
+
+    def run_ours(self, robust=False, delta=None):
+        start_time = time.time()
+        CEs = []
+        for i, x in tqdm(enumerate(self.test_instances)):
+            if robust is False:
+                this_cf = self.run_ours_one(x)
+            else:
+                this_cf = self.run_ours_one_delta_robust(x, delta=delta)
+            CEs.append(this_cf)
         print("total computation time in s:", time.time() - start_time)
+        assert len(CEs) == len(self.test_instances)
         return CEs
 
-    def run_ROAR(self, labels=(1,)):
+    def run_ours_one(self, x):
+        y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
+        this_solver = OptSolver(self.dataset, self.inn_delta_0, y_prime, x, mode=0, eps=0.01, x_prime=None)
+        this_cf = this_solver.compute_counterfactual()
+        if this_cf is None:
+            return this_cf
+        else:
+            return np.round(this_cf, 5)
+
+    def run_ours_one_delta_robust(self, x, delta=None):
+        y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
+        eps = 0.01
+        this_cf = x
+        if delta is None:   # default, delta=self.delta_min
+            while self.is_robust(x, this_cf) != 1 and this_cf is not None:
+                this_solver = OptSolver(self.dataset, self.inn_delta_0, y_prime, x, mode=0, eps=eps, x_prime=None)
+                this_cf = this_solver.compute_counterfactual()
+                eps += 0.2
+        else:
+            while self.is_robust_custom_delta(x, this_cf, delta=delta) != 1 and this_cf is not None:
+                this_solver = OptSolver(self.dataset, self.inn_delta_0, y_prime, x, mode=0, eps=eps, x_prime=None)
+                this_cf = this_solver.compute_counterfactual()
+                eps += 0.2
+        return this_cf
+
+    def run_ROAR(self, robust=False, labels=(1,), delta=None):
         CEs = []
 
         def predict_proba_01(X):
@@ -451,42 +517,62 @@ class UtilExp:
         robust_recourse = RobustRecourse(W=coefficients, W0=intercept, feature_costs=None)
         with HiddenPrints():
             lamb = robust_recourse.choose_lambda(self.test_instances, self.clf.predict, self.X1.values,
-                                                 predict_proba_01)
-
-        found_valids, cf_valids, delta_valids, m2_valids, l1ss, l0ss, lofss = 0, 0, 0, 0, 0, 0, 0
+                                                    predict_proba_01)
         start_time = time.time()
         for i, x in tqdm(enumerate(self.test_instances)):
-            # np.random.seed(i)
-            coefficients, intercept = lime_explanation(predict_proba_01, self.X1.values, x, cat_feats=cat_feats,
-                                                       labels=labels)
-            coefficients, intercept = np.round_(coefficients, 4), np.round_(intercept, 4)
-            robust_recourse.set_W(coefficients)
-            robust_recourse.set_W0(intercept)
-            r, delta_r = robust_recourse.get_recourse(x, lamb=lamb)
-            CEs.append(r)
-            if r is not None:
-                found_valid, cf_valid, delta_valid, m2_valid, l1s, l0s, lofs = self.evaluate_one(r, x)
-                found_valids += found_valid
-                cf_valids += cf_valid
-                delta_valids += delta_valid
-                m2_valids += m2_valid
-                l1ss += l1s
-                l0ss += l0s
-                lofss += lofs
-        if cf_valids != 0:
-            print("average normalised L1:", l1ss / cf_valids)
-            if len(self.discrete_features.keys()) == 0 and len(self.ordinal_features.keys()) == 0:
-                print("average normalised L0:", l0ss / cf_valids)
-                print("average lof score:", lofss / cf_valids)
+            if not robust:
+                CEs.append(self.run_roar_one(x, predict_proba_01, cat_feats, labels, robust_recourse, lamb))
             else:
-                print("average normalised L0: NA")
-                print("average lof score: NA")
-        print("found:", found_valids / len(self.test_instances))
-        print("counterfactual validity:", cf_valids / len(self.test_instances))
-        print("delta validity:", delta_valids / len(self.test_instances))
-        print("m2 validity:", m2_valids / len(self.test_instances))
+                CEs.append(self.run_roar_one_delta_robust(x, predict_proba_01, cat_feats, labels, robust_recourse, lamb, delta))
         print("total computation time in s:", time.time() - start_time)
+        assert len(CEs) == len(self.test_instances)
         return CEs
+
+    def roar_util(self, recourses, xs):
+        assert len(recourses) == len(xs)
+        delta_valid = 0
+        for i, r in enumerate(recourses):
+            if self.is_robust(xs[i], r):
+                delta_valid += 1
+        return delta_valid / len(xs)
+
+    def run_roar_one(self, x, predict_fn, cat_feats, labels, robust_recourse, lamb):
+        coefficients, intercept = lime_explanation(predict_fn, self.X1.values, x, cat_feats=cat_feats,
+                                                   labels=labels)
+        coefficients, intercept = np.round_(coefficients, 4), np.round_(intercept, 4)
+        robust_recourse.set_W(coefficients)
+        robust_recourse.set_W0(intercept)
+        r, delta_r = robust_recourse.get_recourse(x, lamb=lamb)
+        if r is not None:
+            return r
+        else:
+            return None
+
+    def run_roar_one_delta_robust(self, x, predict_fn, cat_feats, labels, robust_recourse, lamb, delta=None):
+        # find the hyperparameter that produces the best bound, if not found robust
+        this_cf = x
+        count = 0
+        best_bound = -1000000
+        best_cf = self.run_roar_one(x, predict_fn, cat_feats, labels, robust_recourse, lamb)
+        if delta is None:   # default, delta=self.delta_min
+            while count <= 8:
+                this_cf = self.run_roar_one(x, predict_fn, cat_feats, labels, robust_recourse, lamb)
+                found, bound = self.is_robust_raw(x, this_cf)
+                if found == 1:
+                    return this_cf
+                if bound is None:
+                    lamb = lamb / 2
+                    count += 1
+                    continue
+                if bound >= best_bound:
+                    best_bound = bound
+                    best_cf = this_cf
+                lamb = lamb / 2
+                count += 1
+        else:
+            raise NotImplementedError("custom delta robust for ROAR not implemented")
+
+        return best_cf
 
     def run_proto(self):
         data_point = np.array(self.X1.values[1])
@@ -510,35 +596,22 @@ class UtilExp:
                                              cat_vars=cat_var,
                                              ohe=False)
             cf.fit(self.X1.values)
-        found_valids, cf_valids, delta_valids, m2_valids, l1ss, l0ss, lofss = 0, 0, 0, 0, 0, 0, 0
         for i, x in tqdm(enumerate(self.test_instances)):
             this_point = x
             with HiddenPrints():
                 explanation = cf.explain(this_point.reshape(1, -1), Y=None, target_class=None, k=20, k_type='mean',
                                          threshold=0., verbose=True, print_every=100, log_every=100)
             if explanation is None:
+                CEs.append(None)
                 continue
             if explanation["cf"] is None:
+                CEs.append(None)
                 continue
             proto_cf = explanation["cf"]["X"]
             proto_cf = proto_cf[0]
             this_cf = np.array(proto_cf)
             CEs.append(this_cf)
-            if this_cf is not None:
-                found_valid, cf_valid, delta_valid, m2_valid, l1s, l0s, lofs = self.evaluate_one(this_cf, x)
-                found_valids += found_valid
-                cf_valids += cf_valid
-                delta_valids += delta_valid
-                m2_valids += m2_valid
-                l1ss += l1s
-                l0ss += l0s
-                lofss += lofs
-        print("average normalised L1:", l1ss / cf_valids)
-        print("average normalised L0:", l0ss / cf_valids)
-        print("average lof score:", lofss / cf_valids)
-        print("found:", found_valids / len(self.test_instances))
-        print("counterfactual validity:", cf_valids / len(self.test_instances))
-        print("delta validity:", delta_valids / len(self.test_instances))
-        print("m2 validity:", m2_valids / len(self.test_instances))
         print("total computation time in s:", time.time() - start_time)
+        assert len(CEs) == len(self.test_instances)
         return CEs
+

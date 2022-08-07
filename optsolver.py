@@ -40,7 +40,8 @@ class OptSolver:
                     if self.mode == 1:
                         self.model.addConstr(node_var[var_idx] == self.x_prime[var_idx], name="lbINN_disc_0_" + str(var_idx))
                 self.model.update()
-                self.model.addConstr(quicksum(disc_var_list) == 1, name='x_disc_0_feat' + str(feat_idx))
+                if self.mode == 0:
+                    self.model.addConstr(quicksum(disc_var_list) == 1, name='x_disc_0_feat' + str(feat_idx))
 
             if self.dataset.feature_types[feat_idx] == DataType.ORDINAL:
                 prev_var = None
@@ -55,7 +56,8 @@ class OptSolver:
                                              name='x_ord_0_var' + str(var_idx - 1) + '_geq_' + str(var_idx))
                     prev_var = node_var[var_idx]
                     ord_var_list.append(node_var[var_idx])
-                self.model.addConstr(quicksum(ord_var_list) >= 1, name='x_ord_0_feat' + str(feat_idx) + '_geq1')
+                if self.mode == 0:
+                    self.model.addConstr(quicksum(ord_var_list) >= 1, name='x_ord_0_feat' + str(feat_idx) + '_geq1')
 
             if self.dataset.feature_types[feat_idx] == DataType.CONTINUOUS_REAL:
                 var_idx = self.dataset.feat_var_map[feat_idx][0]

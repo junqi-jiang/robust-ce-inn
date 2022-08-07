@@ -1,6 +1,8 @@
 import copy
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+import torch
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import LocalOutlierFactor
@@ -10,7 +12,7 @@ import os, sys
 from tqdm import tqdm
 from roar.recourse_methods import RobustRecourse
 from roar.recourse_utils import lime_explanation
-from alibi.explainers import cfproto
+from alibi.explainers import Counterfactual, cfproto
 import tensorflow as tf
 import time
 from optsolver import OptSolver
@@ -104,8 +106,10 @@ def incremental_train(train_gap, base_clf, X_train, y_train, ignore_first_model=
         if ignore_first_model and i == 1:
             continue
         if not percentage_normalise:
-            dists_ws.append(round(inf_norm(ws[i - 1], ws[i]), 3))
-            dists_bs.append(round(inf_norm(bs[i - 1], bs[i]), 3))
+            #dists_ws.append(round(inf_norm(ws[i - 1], ws[i]), 3))
+            dists_ws.append(round(inf_norm(ws[0], ws[i]), 3))   # calculate differences with the first model
+            #dists_bs.append(round(inf_norm(bs[i - 1], bs[i]), 3))
+            dists_bs.append(round(inf_norm(bs[0], bs[i]), 3))
         else:
             dists_ws.append(round(inf_norm_percentage(ws[i - 1], ws[i]), 3))
             dists_bs.append(round(inf_norm_percentage(bs[i - 1], bs[i]), 3))
@@ -289,7 +293,7 @@ class HiddenPrints:
 
 class UtilExp:
     def __init__(self, clf, X1, y1, X2, y2, columns, ordinal_features, discrete_features, continuous_features,
-                 feature_var_map, gap=0.1, desired_class=1):
+                 feature_var_map, gap=0.1, desired_class=1, num_test_instances=50):
         self.clf = clf
         self.num_layers = get_clf_num_layers(clf)
         self.X1 = X1
@@ -303,11 +307,10 @@ class UtilExp:
         self.feat_var_map = feature_var_map
         # =1 (0) will select test instances with classification result 0 (1), =-1 will randomly select test instances
         self.desired_class = desired_class
+        self.num_test_instances = num_test_instances
 
         self.dataset = None
         self.delta_min = -1
-        self.Mplus = None
-        self.Mminus = None
         self.Mmax = None
         self.delta_max = 0  # inf-d(clf, Mmax)
         self.lof = None
@@ -318,7 +321,8 @@ class UtilExp:
         # load util
         self.build_dataset_obj()
         self.build_lof()
-        self.build_Mplus_Mminus(gap)
+        self.build_delta_min(gap)
+        #self.build_Mplus_Mminus(gap)
         self.build_Mmax()
         self.build_test_instances()
         self.build_inns()
@@ -356,14 +360,15 @@ class UtilExp:
         self.delta_max = inf_norm(wb_max, wb_orig)
 
     def build_test_instances(self):
+        np.random.seed(1)
         if self.desired_class >= 0:
             if self.desired_class == 1:
                 random_idx = np.where(self.clf.predict(self.X1.values) == 0)[0]
             else:
                 random_idx = np.where(self.clf.predict(self.X1.values) == 1)[0]
-            random_idx = np.random.choice(random_idx, 50)
+            random_idx = np.random.choice(random_idx, min(self.num_test_instances, len(random_idx)))
         else:
-            random_idx = np.random.randint(len(self.X1.values) - 1, size=(50,))
+            random_idx = np.random.randint(len(self.X1.values) - 1, size=(self.num_test_instances,))
         self.test_instances = self.X1.values[random_idx]
 
     def build_inns(self):
@@ -374,6 +379,22 @@ class UtilExp:
         delta = 0
         weights_0, biases_0 = build_inn_weights_biases(self.clf, self.num_layers, delta, nodes)
         self.inn_delta_0 = Inn(self.num_layers, delta, nodes, weights_0, biases_0)
+
+    def verify_soundness(self, update_test_instances=False):
+        sound = 0
+        valids = []
+        valid_instances = []
+        for i, x in enumerate(self.test_instances):
+            y_prime = self.clf.predict(x.reshape(1, -1))[0]
+            this_solver = OptSolver(self.dataset, self.inn_delta_non_0, y_prime, x, mode=1, M=10000, x_prime=x)
+            found, bound = this_solver.compute_inn_bounds()
+            if found == 1:
+                sound += 1
+                valids.append(i)
+        print(f"percentage of sound model changes: {sound / len(self.test_instances)}")
+        if update_test_instances:
+            self.test_instances = self.test_instances[valids]
+        return valids
 
     def is_robust_raw(self, x, cf):
         y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
@@ -442,9 +463,10 @@ class UtilExp:
                 l0ss += l0s
                 lofss += lofs
         print("found:", found_valids / len(self.test_instances))
-        print("average normalised L1:", l1ss / cf_valids)
-        print("average normalised L0:", l0ss / cf_valids)
-        print("average lof score:", lofss / cf_valids)
+        if cf_valids != 0:
+            print("average normalised L1:", l1ss / cf_valids)
+            print("average normalised L0:", l0ss / cf_valids)
+            print("average lof score:", lofss / cf_valids)
         print("counterfactual validity:", cf_valids / len(self.test_instances))
         print("delta validity:", delta_valids / len(self.test_instances))
         print("m2 validity:", m2_valids / len(self.test_instances))
@@ -487,12 +509,15 @@ class UtilExp:
     def run_ours_one_delta_robust(self, x, delta=None):
         y_prime = 1 if self.clf.predict(x.reshape(1, -1))[0] == 0 else 0
         eps = 0.01
-        this_cf = x
-        if delta is None:   # default, delta=self.delta_min
-            while self.is_robust(x, this_cf) != 1 and this_cf is not None:
+        this_solver = OptSolver(self.dataset, self.inn_delta_0, y_prime, x, mode=0, eps=0.01, x_prime=None)
+        this_cf = this_solver.compute_counterfactual()
+        count = 0
+        if delta is None:  # default, delta=self.delta_min
+            while self.is_robust(x, this_cf) != 1 and this_cf is not None and eps <= 20:
                 this_solver = OptSolver(self.dataset, self.inn_delta_0, y_prime, x, mode=0, eps=eps, x_prime=None)
                 this_cf = this_solver.compute_counterfactual()
                 eps += 0.2
+                count += 1
         else:
             while self.is_robust_custom_delta(x, this_cf, delta=delta) != 1 and this_cf is not None:
                 this_solver = OptSolver(self.dataset, self.inn_delta_0, y_prime, x, mode=0, eps=eps, x_prime=None)
@@ -500,11 +525,8 @@ class UtilExp:
                 eps += 0.2
         return this_cf
 
-    def run_ROAR(self, robust=False, labels=(1,), delta=None):
+    def run_ROAR(self, robust=False, labels=(1,), delta=None, lamb1_mul=4, max_iter=10):
         CEs = []
-
-        def predict_proba_01(X):
-            return (self.clf.predict_proba(X) >= 0.5).astype(np.int)
 
         # find categorical features
         cat_feats = []
@@ -512,18 +534,15 @@ class UtilExp:
             if key != self.dataset.num_features and self.dataset.feature_types[key] != DataType.CONTINUOUS_REAL:
                 cat_feats.extend(self.dataset.feat_var_map[key])
         cat_feats.sort()
-
-        coefficients = intercept = None
-        robust_recourse = RobustRecourse(W=coefficients, W0=intercept, feature_costs=None)
-        with HiddenPrints():
-            lamb = robust_recourse.choose_lambda(self.test_instances, self.clf.predict, self.X1.values,
-                                                    predict_proba_01)
         start_time = time.time()
         for i, x in tqdm(enumerate(self.test_instances)):
+            lamb1 = 1
             if not robust:
-                CEs.append(self.run_roar_one(x, predict_proba_01, cat_feats, labels, robust_recourse, lamb))
+                ce, lamb2 = self.run_roar_one(x, cat_feats, labels, lamb1=1, lamb22=None)
+                CEs.append(ce)
             else:
-                CEs.append(self.run_roar_one_delta_robust(x, predict_proba_01, cat_feats, labels, robust_recourse, lamb, delta))
+                CEs.append(
+                    self.run_roar_one_delta_robust(x, cat_feats, labels, lamb1=lamb1, delta=None, lamb1_mul=lamb1_mul, max_iter=max_iter))
         print("total computation time in s:", time.time() - start_time)
         assert len(CEs) == len(self.test_instances)
         return CEs
@@ -536,38 +555,53 @@ class UtilExp:
                 delta_valid += 1
         return delta_valid / len(xs)
 
-    def run_roar_one(self, x, predict_fn, cat_feats, labels, robust_recourse, lamb):
-        coefficients, intercept = lime_explanation(predict_fn, self.X1.values, x, cat_feats=cat_feats,
+    def run_roar_one(self, x, cat_feats, labels, lamb1=1, lamb22=None):
+        def predict_proba_01(X):
+            return (self.clf.predict_proba(X) >= 0.5).astype(np.int)
+
+        coefficients = intercept = None
+        robust_recourse = RobustRecourse(W=coefficients, W0=intercept, feature_costs=None, y_target=1)
+        with HiddenPrints():
+            if lamb22 is None:
+                lamb2 = robust_recourse.choose_lambda(x.reshape(1, -1), self.clf.predict, self.X1.values,
+                                                      predict_proba_01)
+            else:
+                lamb2 = lamb22
+        coefficients, intercept = lime_explanation(predict_proba_01, self.X1.values, x, cat_feats=cat_feats,
                                                    labels=labels)
         coefficients, intercept = np.round_(coefficients, 4), np.round_(intercept, 4)
         robust_recourse.set_W(coefficients)
         robust_recourse.set_W0(intercept)
-        r, delta_r = robust_recourse.get_recourse(x, lamb=lamb)
+        r, delta_r = robust_recourse.get_recourse(x, lamb1=lamb1, lamb2=lamb2)
         if r is not None:
-            return r
+            return r, lamb2
         else:
-            return None
+            return None, None
 
-    def run_roar_one_delta_robust(self, x, predict_fn, cat_feats, labels, robust_recourse, lamb, delta=None):
+    def run_roar_one_delta_robust(self, x, cat_feats, labels, lamb1=1, delta=None, lamb1_mul=4, max_iter=10):
         # find the hyperparameter that produces the best bound, if not found robust
-        this_cf = x
         count = 0
-        best_bound = -1000000
-        best_cf = self.run_roar_one(x, predict_fn, cat_feats, labels, robust_recourse, lamb)
-        if delta is None:   # default, delta=self.delta_min
-            while count <= 8:
-                this_cf = self.run_roar_one(x, predict_fn, cat_feats, labels, robust_recourse, lamb)
+        best_cf, lamb2 = self.run_roar_one(x, cat_feats, labels, lamb1)
+        found, bound = self.is_robust_raw(x, best_cf)
+        if found == 1:
+            return best_cf
+        best_bound = -100000 if bound is None else bound
+        if delta is None:  # default, delta=self.delta_min
+            while count <= max_iter:
+                this_cf, lamb2 = self.run_roar_one(x, cat_feats, labels, lamb1, lamb2)
                 found, bound = self.is_robust_raw(x, this_cf)
                 if found == 1:
                     return this_cf
                 if bound is None:
-                    lamb = lamb / 2
+                    lamb1 = lamb1 * lamb1_mul
+                    lamb2 = lamb2 / 2
                     count += 1
                     continue
                 if bound >= best_bound:
                     best_bound = bound
                     best_cf = this_cf
-                lamb = lamb / 2
+                lamb1 = lamb1 * lamb1_mul
+                lamb2 = lamb2 / 2
                 count += 1
         else:
             raise NotImplementedError("custom delta robust for ROAR not implemented")
@@ -614,4 +648,200 @@ class UtilExp:
         print("total computation time in s:", time.time() - start_time)
         assert len(CEs) == len(self.test_instances)
         return CEs
+
+    def run_proto_robust(self, non_robust_ces):
+        data_point = np.array(self.X1.values[1])
+        shape = (1,) + data_point.shape[:]
+        predict_fn = lambda x: self.clf.predict_proba(x)
+        cat_var = {}
+        for idx in self.dataset.feature_types:
+            if self.dataset.feature_types[idx] != DataType.CONTINUOUS_REAL:
+                for varidx in self.dataset.feat_var_map[idx]:
+                    cat_var[varidx] = 2
+        CEs = []
+        start_time = time.time()
+
+        # hyperparameter in the Proto method, c is the coefficient for the predict term in the loss.
+        # restrict method to not update this hpp
+        for i, x in tqdm(enumerate(self.test_instances)):
+            c_init = 10.
+            theta = 10.
+            beta = 0.1
+            count = 0
+            # make sure the method is at least as good as the non-robust one: using the same default settings first
+            best_cf = non_robust_ces[i]
+            if best_cf is None:
+                c_init = c_init * 2
+                theta = theta / 2
+                beta = beta / 2
+                count += 1
+                best_bound = -10000
+                best_cf = x
+            else:
+                found, bound = self.is_robust_raw(x, best_cf)
+                if found == 1:
+                    CEs.append(best_cf)
+                    continue
+                best_bound = bound if bound is not None else -10000
+            while count <= 10 and best_cf is not None:
+                with HiddenPrints():
+                    this_cf = self.run_proto_robust_one(x, predict_fn, shape, cat_var, c_init, theta, beta)
+                if this_cf is None:
+                    c_init = c_init * 2
+                    theta = theta / 2
+                    beta = beta / 2
+                    count += 1
+                    continue
+                found, bound = self.is_robust_raw(x, this_cf)
+                if bound is None:
+                    c_init = c_init * 2
+                    theta = theta / 2
+                    beta = beta / 2
+                    count += 1
+                    continue
+                if found == 1:
+                    best_bound = bound
+                    best_cf = this_cf
+                    break
+                if bound >= best_bound:
+                    best_bound = bound
+                    best_cf = this_cf
+                c_init += 10
+                theta = theta / 2
+                count += 1
+            if np.sum(x - best_cf) == 0:
+                CEs.append(None)
+                continue
+            CEs.append(best_cf)
+
+        print("total computation time in s:", time.time() - start_time)
+        # print("guaranteed robustness cf:", guaranteed_rob_count / len(CEs))
+        assert len(CEs) == len(self.test_instances)
+        return CEs
+
+    def run_proto_robust_one(self, x, predict_fn, shape, cat_var, c_init, theta=10., beta=0.1, c_steps=3):
+        if len(self.discrete_features.keys()) == 0 and len(self.ordinal_features.keys()) == 0:
+            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=theta, c_steps=c_steps,
+                                             c_init=c_init, beta=beta,
+                                             feature_range=(np.array(self.X1.values.min(axis=0)).reshape(1, -1),
+                                                            np.array(self.X1.values.max(axis=0)).reshape(1, -1)))
+            cf.fit(self.X1.values, trustscore_kwargs=None)
+        else:
+            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=theta, c_steps=c_steps,
+                                             c_init=c_init, beta=beta,
+                                             feature_range=(
+                                                 np.array(self.X1.min(axis=0)).reshape(1, -1),
+                                                 np.array(self.X1.max(axis=0)).reshape(1, -1)),
+                                             cat_vars=cat_var,
+                                             ohe=False)
+            cf.fit(self.X1.values)
+        this_point = x
+        with HiddenPrints():
+            explanation = cf.explain(this_point.reshape(1, -1), Y=None, target_class=None, k=20, k_type='mean',
+                                     threshold=0., verbose=True, print_every=100, log_every=100)
+        if explanation is None:
+            return None
+        if explanation["cf"] is None:
+            return None
+        proto_cf = explanation["cf"]["X"]
+        proto_cf = proto_cf[0]
+        return np.array(proto_cf)
+
+    def run_wachter(self):
+        CEs = []
+        data_point = np.array(self.X1.values[1])
+        shape = (1,) + data_point.shape[:]
+        predict_fn = lambda x: self.clf.predict_proba(x)
+        cf = Counterfactual(predict_fn, shape, distance_fn='l1', target_proba=1.0,
+                            target_class='other', max_iter=1000, early_stop=50, lam_init=1e-1,
+                            max_lam_steps=10, tol=0.05, learning_rate_init=0.1,
+                            feature_range=(0, 1), eps=0.01, init='identity',
+                            decay=True, write_dir=None, debug=False)
+        start_time = time.time()
+        for i, x in tqdm(enumerate(self.test_instances)):
+            this_point = x
+            with HiddenPrints():
+                explanation = cf.explain(this_point.reshape(1, -1))
+            if explanation is None:
+                CEs.append(None)
+                continue
+            if explanation["cf"] is None:
+                CEs.append(None)
+                continue
+            proto_cf = explanation["cf"]["X"]
+            proto_cf = proto_cf[0]
+            this_cf = np.array(proto_cf)
+            CEs.append(this_cf)
+        print("total computation time in s:", time.time() - start_time)
+        assert len(CEs) == len(self.test_instances)
+        return CEs
+
+    def run_wachter_robust(self):
+        CEs = []
+        data_point = np.array(self.X1.values[1])
+        shape = (1,) + data_point.shape[:]
+        predict_fn = lambda x: self.clf.predict_proba(x)
+        start_time = time.time()
+        for i, x in tqdm(enumerate(self.test_instances)):
+            count = 0
+            # make sure the method is at least as good as the non-robust one: using the same default settings first
+            lamb = 0.1
+            best_cf = self.run_wachter_robust_one(x, predict_fn, shape)
+            if best_cf is None:
+                lamb = lamb / 2
+                count += 1
+                best_bound = -10000
+                best_cf = x
+            else:
+                found, bound = self.is_robust_raw(x, best_cf)
+                if found == 1:
+                    CEs.append(best_cf)
+                    continue
+                best_bound = bound if bound is not None else -10000
+            while count <= 8 and best_cf is not None:
+                with HiddenPrints():
+                    this_cf = self.run_wachter_robust_one(x, predict_fn, shape, lamb, lam_step=2)
+                if this_cf is None:
+                    lamb = lamb / 2
+                    count += 1
+                    continue
+                found, bound = self.is_robust_raw(x, this_cf)
+                if bound is None:
+                    lamb = lamb / 2
+                    count += 1
+                    continue
+                if found == 1:
+                    best_bound = bound
+                    best_cf = this_cf
+                    break
+                if bound >= best_bound:
+                    best_bound = bound
+                    best_cf = this_cf
+                lamb = lamb / 2
+                count += 1
+            if np.sum(x - best_cf) == 0:
+                CEs.append(None)
+                continue
+            CEs.append(best_cf)
+
+        print("total computation time in s:", time.time() - start_time)
+        # print("guaranteed robustness cf:", guaranteed_rob_count / len(CEs))
+        assert len(CEs) == len(self.test_instances)
+        return CEs
+
+    def run_wachter_robust_one(self, x, predict_fn, shape, lam=0.1, lam_step=10):
+        cf = Counterfactual(predict_fn, shape, distance_fn='l1', target_proba=1.0,
+                            target_class='other', max_iter=1000, early_stop=50, lam_init=lam,
+                            max_lam_steps=lam_step, tol=0.05, learning_rate_init=0.1,
+                            feature_range=(0, 1), eps=0.01, init='identity',
+                            decay=True, write_dir=None, debug=False)
+        with HiddenPrints():
+            explanation = cf.explain(x.reshape(1, -1))
+        if explanation is None:
+            return None
+        if explanation["cf"] is None:
+            return None
+        proto_cf = explanation["cf"]["X"]
+        proto_cf = proto_cf[0]
+        return np.array(proto_cf)
 

@@ -123,9 +123,9 @@ class RobustRecourse():
 
     def calc_delta_opt(self, recourse):
         """
-		calculate the optimal delta using linear program
-		:returns: torch tensor with optimal delta value
-		"""
+    	calculate the optimal delta using linear program
+    	:returns: torch tensor with optimal delta value
+    	"""
         W = torch.cat((self.W, self.W0), 0)  # Add intercept to weights
         recourse = torch.cat((recourse, torch.ones(1)), 0)  # Add 1 to the feature vector for intercept
 
@@ -191,6 +191,7 @@ class RobustRecourse():
 
             loss_diff = torch.dist(loss_prev, loss, 2)
         return x_new.detach().numpy(), np.concatenate((delta_W.detach().numpy(), delta_W0.detach().numpy()))
+
 
     # Heuristic for picking hyperparam lambda
     def choose_lambda(self, recourse_needed_X, predict_fn, X_train=None, predict_proba_fn=None, cat_feats=None, labels=(1,)):

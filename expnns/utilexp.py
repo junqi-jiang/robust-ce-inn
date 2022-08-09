@@ -353,8 +353,18 @@ class UtilExp:
         self.Mplus, self.Mminus = build_delta_extreme_shifted_models(self.clf, self.delta_min)
 
     def build_Mmax(self):
-        self.Mmax = copy.deepcopy(self.clf)
-        self.Mmax.partial_fit(self.X2, self.y2)
+        wb_orig = get_flattened_weight_and_bias(self.clf)
+        for i in range(5):
+            np.random.seed(i)
+            idxs = np.random.choice(range(len(self.X2.values)), int(0.99 * len(self.X2.values)))
+            this_clf = copy.deepcopy(self.clf)
+            this_clf.partial_fit(self.X2.values[idxs], self.y2.values[idxs])
+            this_wb = get_flattened_weight_and_bias(this_clf)
+            this_delta = inf_norm(wb_orig, this_wb)
+            if this_delta >= self.delta_max:
+                self.delta_max = this_delta
+                self.Mmax = this_clf
+
         wb_orig = get_flattened_weight_and_bias(self.clf)
         wb_max = get_flattened_weight_and_bias(self.Mmax)
         self.delta_max = inf_norm(wb_max, wb_orig)
@@ -393,7 +403,10 @@ class UtilExp:
                 valids.append(i)
         print(f"percentage of sound model changes: {sound / len(self.test_instances)}")
         if update_test_instances:
+            if len(valids) >= 50:
+                valids = valids[:50]
             self.test_instances = self.test_instances[valids]
+            print(f"test instances updated to sound (x, Delta) pairs, length: {len(valids)}")
         return valids
 
     def is_robust_raw(self, x, cf):
@@ -608,7 +621,7 @@ class UtilExp:
 
         return best_cf
 
-    def run_proto(self):
+    def run_proto(self, kap=0.1):
         data_point = np.array(self.X1.values[1])
         shape = (1,) + data_point.shape[:]
         predict_fn = lambda x: self.clf.predict_proba(x)
@@ -620,14 +633,14 @@ class UtilExp:
         CEs = []
         start_time = time.time()
         if len(self.discrete_features.keys()) == 0 and len(self.ordinal_features.keys()) == 0:
-            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=10.,
+            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=10., kappa=kap,
                                              feature_range=(np.array(self.X1.values.min(axis=0)).reshape(1, -1),
                                                             np.array(self.X1.values.max(axis=0)).reshape(1, -1)))
             cf.fit(self.X1.values, trustscore_kwargs=None)
         else:
             cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=10., feature_range=(
                 np.array(self.X1.min(axis=0)).reshape(1, -1), np.array(self.X1.max(axis=0)).reshape(1, -1)),
-                                             cat_vars=cat_var,
+                                             cat_vars=cat_var, kappa=kap,
                                              ohe=False)
             cf.fit(self.X1.values)
         for i, x in tqdm(enumerate(self.test_instances)):
@@ -747,14 +760,14 @@ class UtilExp:
         proto_cf = proto_cf[0]
         return np.array(proto_cf)
 
-    def run_wachter(self):
+    def run_wachter(self, lam_init=0.1, max_lam_steps=3, target_proba=0.6):
         CEs = []
         data_point = np.array(self.X1.values[1])
         shape = (1,) + data_point.shape[:]
         predict_fn = lambda x: self.clf.predict_proba(x)
-        cf = Counterfactual(predict_fn, shape, distance_fn='l1', target_proba=1.0,
-                            target_class='other', max_iter=1000, early_stop=50, lam_init=1e-1,
-                            max_lam_steps=10, tol=0.05, learning_rate_init=0.1,
+        cf = Counterfactual(predict_fn, shape, distance_fn='l1', target_proba=target_proba,
+                            target_class='other', max_iter=1000, early_stop=50, lam_init=lam_init,
+                            max_lam_steps=max_lam_steps, tol=0.05, learning_rate_init=0.1,
                             feature_range=(0, 1), eps=0.01, init='identity',
                             decay=True, write_dir=None, debug=False)
         start_time = time.time()
@@ -800,7 +813,7 @@ class UtilExp:
                 best_bound = bound if bound is not None else -10000
             while count <= 8 and best_cf is not None:
                 with HiddenPrints():
-                    this_cf = self.run_wachter_robust_one(x, predict_fn, shape, lamb, lam_step=2)
+                    this_cf = self.run_wachter_robust_one(x, predict_fn, shape, lamb, target_proba=prob)
                 if this_cf is None:
                     lamb = lamb / 2
                     count += 1
@@ -829,8 +842,8 @@ class UtilExp:
         assert len(CEs) == len(self.test_instances)
         return CEs
 
-    def run_wachter_robust_one(self, x, predict_fn, shape, lam=0.1, lam_step=10):
-        cf = Counterfactual(predict_fn, shape, distance_fn='l1', target_proba=1.0,
+    def run_wachter_robust_one(self, x, predict_fn, shape, lam=0.1, lam_step=3, target_proba=0.55):
+        cf = Counterfactual(predict_fn, shape, distance_fn='l1', target_proba=target_proba,
                             target_class='other', max_iter=1000, early_stop=50, lam_init=lam,
                             max_lam_steps=lam_step, tol=0.05, learning_rate_init=0.1,
                             feature_range=(0, 1), eps=0.01, init='identity',
@@ -844,4 +857,23 @@ class UtilExp:
         proto_cf = explanation["cf"]["X"]
         proto_cf = proto_cf[0]
         return np.array(proto_cf)
+
+
+def evaluate_ces_validity_plot(util_exp, test_instances, ces, target_delta=0.05):
+    deltas = np.arange(target_delta/10, target_delta*1.01, target_delta/10)
+    delta_vals = []
+    for delta in deltas:
+        delta_val = 0
+        nodes = build_inn_nodes(util_exp.clf, util_exp.num_layers)
+        weights, biases = build_inn_weights_biases(util_exp.clf, util_exp.num_layers, delta, nodes)
+        inn_delta = Inn(util_exp.num_layers, delta, nodes, weights, biases)
+        for i, x in enumerate(test_instances):
+            if ces[i] is None:
+                continue
+            y_prime = 1 if util_exp.clf.predict(x.reshape(1, -1))[0] == 0 else 0
+            this_solver = OptSolver(util_exp.dataset, inn_delta, y_prime, x, mode=1, M=10000, x_prime=ces[i])
+            if this_solver.compute_inn_bounds()[0] == 1:
+                delta_val += 1
+        delta_vals.append(delta_val / len(test_instances))
+    return delta_vals
 

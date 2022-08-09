@@ -78,7 +78,6 @@ def lime_explanation(model_pred_proba, X_train, x, cat_feats=None, labels=(1,)):
     #intercept = exp.intercept[0]
     return coefficients, intercept
 
-
 class GermanSCM():
     def __init__(self, X):
         self.f3 = LinearRegression()

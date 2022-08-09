@@ -25,7 +25,7 @@ class OptSolver:
         self.eps = eps
         self.M = M
         if x_prime is not None:
-            self.x_prime = x_prime
+            self.x_prime = np.round(x_prime, 6)
         self.output_node_name = None
 
     def add_input_variable_constraints(self):
@@ -35,7 +35,10 @@ class OptSolver:
             if self.dataset.feature_types[feat_idx] == DataType.DISCRETE:
                 disc_var_list = []
                 for var_idx in self.dataset.feat_var_map[feat_idx]:
-                    node_var[var_idx] = self.model.addVar(vtype=GRB.BINARY, name='x_disc_0_' + str(var_idx))
+                    if self.mode == 1:
+                        node_var[var_idx] = self.model.addVar(lb=-float('inf'), vtype=GRB.CONTINUOUS, name='x_disc_0_' + str(var_idx))
+                    else:
+                        node_var[var_idx] = self.model.addVar(vtype=GRB.BINARY, name='x_disc_0_' + str(var_idx))
                     disc_var_list.append(node_var[var_idx])
                     if self.mode == 1:
                         self.model.addConstr(node_var[var_idx] == self.x_prime[var_idx], name="lbINN_disc_0_" + str(var_idx))
@@ -47,11 +50,14 @@ class OptSolver:
                 prev_var = None
                 ord_var_list = []
                 for i, var_idx in enumerate(self.dataset.feat_var_map[feat_idx]):
-                    node_var[var_idx] = self.model.addVar(vtype=GRB.BINARY, name='x_ord_0_' + str(var_idx))
+                    if self.mode == 1:
+                        node_var[var_idx] = self.model.addVar(lb=-float('inf'), vtype=GRB.CONTINUOUS, name='x_ord_0_' + str(var_idx))
+                    else:
+                        node_var[var_idx] = self.model.addVar(vtype=GRB.BINARY, name='x_ord_0_' + str(var_idx))
                     self.model.update()
                     if self.mode == 1:
                         self.model.addConstr(node_var[var_idx] == self.x_prime[var_idx], name="lbINN_disc_0_" + str(var_idx))
-                    if i != 0:
+                    if i != 0 and self.mode == 0:
                         self.model.addConstr(prev_var >= node_var[var_idx],
                                              name='x_ord_0_var' + str(var_idx - 1) + '_geq_' + str(var_idx))
                     prev_var = node_var[var_idx]
@@ -61,7 +67,11 @@ class OptSolver:
 
             if self.dataset.feature_types[feat_idx] == DataType.CONTINUOUS_REAL:
                 var_idx = self.dataset.feat_var_map[feat_idx][0]
-                node_var[var_idx] = self.model.addVar(lb=0, ub=1, vtype=GRB.SEMICONT, name="x_cont_0_" + str(var_idx))
+                if self.mode == 1:
+                    node_var[var_idx] = self.model.addVar(lb=-float('inf'), ub=1, vtype=GRB.SEMICONT,
+                                                          name="x_cont_0_" + str(var_idx))
+                else:
+                    node_var[var_idx] = self.model.addVar(lb=0, ub=1, vtype=GRB.SEMICONT, name="x_cont_0_" + str(var_idx))
                 if self.mode == 1:
                     self.model.addConstr(node_var[var_idx] == self.x_prime[var_idx], name="lbINN_disc_0_" + str(var_idx))
             self.model.update()

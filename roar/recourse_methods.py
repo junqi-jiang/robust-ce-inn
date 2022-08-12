@@ -56,27 +56,6 @@ def counterfactual_recourse(torch_model, x, feature_costs=None, y_target=1.0, n_
     return x_new.detach().numpy()
 
 
-'''
-def actionable_recourse(x,X_train, coefficients, intercept, cost_type, feature_costs=None):
-	action_set = ActionSet(X=X_train)
-	rb = RecourseBuilder(
-		  optimizer="cplex",
-		  coefficients=coefficients,
-		  intercept=intercept,
-		  action_set=action_set,
-		  x=x,mip_cost_type=cost_type,
-		  pwfeature_costs=feature_costs
-	)
-	r = rb.fit()
-	if r['feasible']:
-		ur = x+r["actions"]
-	else:
-		ur = x
-		"Failed to find recourse"
-	return ur 
-'''
-
-
 class RobustRecourse():
     def __init__(self, W=None, W0=None, y_target=1,
                  delta_max=0.1, feature_costs=None,
@@ -123,9 +102,9 @@ class RobustRecourse():
 
     def calc_delta_opt(self, recourse):
         """
-		calculate the optimal delta using linear program
-		:returns: torch tensor with optimal delta value
-		"""
+    	calculate the optimal delta using linear program
+    	:returns: torch tensor with optimal delta value
+    	"""
         W = torch.cat((self.W, self.W0), 0)  # Add intercept to weights
         recourse = torch.cat((recourse, torch.ones(1)), 0)  # Add 1 to the feature vector for intercept
 
@@ -149,12 +128,13 @@ class RobustRecourse():
         delta_W, delta_W0 = np.array(delta_opt[:-1]), np.array([delta_opt[-1]])
         return delta_W, delta_W0
 
-    def get_recourse(self, x, lamb=0.1):
+    def get_recourse(self, x, lamb1=1.0, lamb2=0.1):
         torch.manual_seed(0)
 
         # returns x'
         x = torch.from_numpy(x).float()
-        lamb = torch.tensor(lamb).float()
+        lamb2 = torch.tensor(lamb2).float()
+        lamb1 = torch.tensor(lamb1).float()
 
         x_new = Variable(x.clone(), requires_grad=True)
         optimizer = optim.Adam([x_new])
@@ -183,18 +163,18 @@ class RobustRecourse():
                 cost = self.pfc_cost(x_new, x)
             else:
                 cost = self.l1_cost(x_new, x)
-            #print(f_x_new) this is always 1
-            loss = loss_fn(f_x_new, self.y_target) + lamb * cost
+
+            loss = lamb1 * loss_fn(f_x_new, self.y_target) + lamb2 * cost
             loss.backward()
             optimizer.step()
 
             loss_diff = torch.dist(loss_prev, loss, 2)
         return x_new.detach().numpy(), np.concatenate((delta_W.detach().numpy(), delta_W0.detach().numpy()))
 
+
     # Heuristic for picking hyperparam lambda
     def choose_lambda(self, recourse_needed_X, predict_fn, X_train=None, predict_proba_fn=None, cat_feats=None, labels=(1,)):
-        lambdas = np.arange(0.1, 1.1, 0.1)
-
+        lambdas = np.concatenate((np.array([0.0005, 0.001, 0.005]), np.arange(0.01, 1.1, 0.05)))
         v_old = 0
         for i, lamb in enumerate(lambdas):
             print("Testing lambda:%f" % lamb)
@@ -211,18 +191,18 @@ class RobustRecourse():
                     self.set_W(coefficients)
                     self.set_W0(intercept)
 
-                    r, _ = self.get_recourse(x, lamb)
+                    r, _ = self.get_recourse(x, lamb2=lamb)
 
                     self.set_W(None)
                     self.set_W0(None)
                 else:
-                    r, _ = self.get_recourse(x, lamb)
+                    r, _ = self.get_recourse(x, lamb2=lamb)
                 recourses.append(r)
 
             v = recourse_validity(predict_fn, recourses, target=self.y_target.numpy())
             if v >= v_old:
                 v_old = v
-            else:
+            else:   # return last lambda when the counterfactual validity starts to drop
                 li = max(0, i - 1)
                 return lambdas[li]
 

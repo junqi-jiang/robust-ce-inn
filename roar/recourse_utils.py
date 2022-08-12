@@ -68,7 +68,7 @@ def lime_explanation(model_pred_proba, X_train, x, cat_feats=None, labels=(1,)):
     exp = explainer.explain_instance(x,
                                      model_pred_proba,
                                      num_features=X_train.shape[1],
-                                     model_regressor=LogisticRegression(),labels=labels)
+                                     model_regressor=LogisticRegression(), num_samples=20000, labels=labels)
                                      #num_samples=20000,
                                      #labels=(1,))
     #coefficients = exp.local_exp[0][0][1]
@@ -77,7 +77,6 @@ def lime_explanation(model_pred_proba, X_train, x, cat_feats=None, labels=(1,)):
     intercept = exp.intercept[labels[0]]
     #intercept = exp.intercept[0]
     return coefficients, intercept
-
 
 class GermanSCM():
     def __init__(self, X):

@@ -538,9 +538,8 @@ class UtilExp:
                 eps += 0.2
         return this_cf
 
-    def run_ROAR(self, robust=False, labels=(1,), delta=None, lamb1_mul=4, max_iter=10):
+    def run_ROAR(self, robust=False, labels=(1,), delta=None, lamb1_mul=4, max_iter=10, eps=1):
         CEs = []
-
         # find categorical features
         cat_feats = []
         for key in self.feat_var_map.keys():
@@ -551,7 +550,7 @@ class UtilExp:
         for i, x in tqdm(enumerate(self.test_instances)):
             lamb1 = 1
             if not robust:
-                ce, lamb2 = self.run_roar_one(x, cat_feats, labels, lamb1=1, lamb22=None)
+                ce, lamb2 = self.run_roar_one(x, cat_feats, labels, lamb1=1, lamb22=None, eps=eps)
                 CEs.append(ce)
             else:
                 CEs.append(
@@ -568,12 +567,12 @@ class UtilExp:
                 delta_valid += 1
         return delta_valid / len(xs)
 
-    def run_roar_one(self, x, cat_feats, labels, lamb1=1, lamb22=None):
+    def run_roar_one(self, x, cat_feats, labels, lamb1=1, lamb22=None, eps=1):
         def predict_proba_01(X):
             return (self.clf.predict_proba(X) >= 0.5).astype(np.int)
 
         coefficients = intercept = None
-        robust_recourse = RobustRecourse(W=coefficients, W0=intercept, feature_costs=None, y_target=1)
+        robust_recourse = RobustRecourse(W=coefficients, W0=intercept, feature_costs=None, y_target=eps)
         with HiddenPrints():
             if lamb22 is None:
                 lamb2 = robust_recourse.choose_lambda(x.reshape(1, -1), self.clf.predict, self.X1.values,
@@ -621,7 +620,7 @@ class UtilExp:
 
         return best_cf
 
-    def run_proto(self, kap=0.1):
+    def run_proto(self, kap=0.1, theta=0.):
         data_point = np.array(self.X1.values[1])
         shape = (1,) + data_point.shape[:]
         predict_fn = lambda x: self.clf.predict_proba(x)
@@ -633,12 +632,12 @@ class UtilExp:
         CEs = []
         start_time = time.time()
         if len(self.discrete_features.keys()) == 0 and len(self.ordinal_features.keys()) == 0:
-            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=10., kappa=kap,
+            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=theta, kappa=kap,
                                              feature_range=(np.array(self.X1.values.min(axis=0)).reshape(1, -1),
                                                             np.array(self.X1.values.max(axis=0)).reshape(1, -1)))
             cf.fit(self.X1.values, trustscore_kwargs=None)
         else:
-            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=10., feature_range=(
+            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=theta, feature_range=(
                 np.array(self.X1.min(axis=0)).reshape(1, -1), np.array(self.X1.max(axis=0)).reshape(1, -1)),
                                              cat_vars=cat_var, kappa=kap,
                                              ohe=False)
@@ -662,7 +661,7 @@ class UtilExp:
         assert len(CEs) == len(self.test_instances)
         return CEs
 
-    def run_proto_robust(self, non_robust_ces):
+    def run_proto_robust(self, kap=0.1, theta=0.):
         data_point = np.array(self.X1.values[1])
         shape = (1,) + data_point.shape[:]
         predict_fn = lambda x: self.clf.predict_proba(x)
@@ -674,57 +673,33 @@ class UtilExp:
         CEs = []
         start_time = time.time()
 
-        # hyperparameter in the Proto method, c is the coefficient for the predict term in the loss.
+        # hyperparameter in the Proto method, kappa: address probability=1
         # restrict method to not update this hpp
         for i, x in tqdm(enumerate(self.test_instances)):
-            c_init = 10.
-            theta = 10.
-            beta = 0.1
-            count = 0
+            kaps = np.concatenate((np.arange(kap, 1.01, 0.2), np.array([1])))
             # make sure the method is at least as good as the non-robust one: using the same default settings first
-            best_cf = non_robust_ces[i]
+            best_cf = self.run_proto_robust_one(x, predict_fn, shape, cat_var, theta, kap=kap)
             if best_cf is None:
-                c_init = c_init * 2
-                theta = theta / 2
-                beta = beta / 2
-                count += 1
                 best_bound = -10000
-                best_cf = x
             else:
                 found, bound = self.is_robust_raw(x, best_cf)
                 if found == 1:
                     CEs.append(best_cf)
                     continue
                 best_bound = bound if bound is not None else -10000
-            while count <= 10 and best_cf is not None:
+            for kappa in kaps:
                 with HiddenPrints():
-                    this_cf = self.run_proto_robust_one(x, predict_fn, shape, cat_var, c_init, theta, beta)
+                    this_cf = self.run_proto_robust_one(x, predict_fn, shape, cat_var, theta, kap=kappa)
                 if this_cf is None:
-                    c_init = c_init * 2
-                    theta = theta / 2
-                    beta = beta / 2
-                    count += 1
                     continue
                 found, bound = self.is_robust_raw(x, this_cf)
                 if bound is None:
-                    c_init = c_init * 2
-                    theta = theta / 2
-                    beta = beta / 2
-                    count += 1
                     continue
-                if found == 1:
-                    best_bound = bound
-                    best_cf = this_cf
-                    break
                 if bound >= best_bound:
-                    best_bound = bound
                     best_cf = this_cf
-                c_init += 10
-                theta = theta / 2
-                count += 1
-            if np.sum(x - best_cf) == 0:
-                CEs.append(None)
-                continue
+                    best_bound = bound
+                    if found == 1:
+                        break
             CEs.append(best_cf)
 
         print("total computation time in s:", time.time() - start_time)
@@ -732,16 +707,14 @@ class UtilExp:
         assert len(CEs) == len(self.test_instances)
         return CEs
 
-    def run_proto_robust_one(self, x, predict_fn, shape, cat_var, c_init, theta=10., beta=0.1, c_steps=3):
+    def run_proto_robust_one(self, x, predict_fn, shape, cat_var, theta=0., kap=0.1):
         if len(self.discrete_features.keys()) == 0 and len(self.ordinal_features.keys()) == 0:
-            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=theta, c_steps=c_steps,
-                                             c_init=c_init, beta=beta,
+            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=theta, kappa=kap,
                                              feature_range=(np.array(self.X1.values.min(axis=0)).reshape(1, -1),
                                                             np.array(self.X1.values.max(axis=0)).reshape(1, -1)))
             cf.fit(self.X1.values, trustscore_kwargs=None)
         else:
-            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=theta, c_steps=c_steps,
-                                             c_init=c_init, beta=beta,
+            cf = cfproto.CounterFactualProto(predict_fn, shape, use_kdtree=True, theta=theta, kappa=kap,
                                              feature_range=(
                                                  np.array(self.X1.min(axis=0)).reshape(1, -1),
                                                  np.array(self.X1.max(axis=0)).reshape(1, -1)),
@@ -760,7 +733,7 @@ class UtilExp:
         proto_cf = proto_cf[0]
         return np.array(proto_cf)
 
-    def run_wachter(self, lam_init=0.1, max_lam_steps=3, target_proba=0.6):
+    def run_wachter(self, lam_init=0.1, max_lam_steps=10, target_proba=0.6):
         CEs = []
         data_point = np.array(self.X1.values[1])
         shape = (1,) + data_point.shape[:]
@@ -789,52 +762,41 @@ class UtilExp:
         assert len(CEs) == len(self.test_instances)
         return CEs
 
-    def run_wachter_robust(self):
+    def run_wachter_robust(self, lam_init=0.1, target_proba=0.6):
         CEs = []
         data_point = np.array(self.X1.values[1])
         shape = (1,) + data_point.shape[:]
         predict_fn = lambda x: self.clf.predict_proba(x)
         start_time = time.time()
         for i, x in tqdm(enumerate(self.test_instances)):
-            count = 0
             # make sure the method is at least as good as the non-robust one: using the same default settings first
-            lamb = 0.1
-            best_cf = self.run_wachter_robust_one(x, predict_fn, shape)
+            best_cf = self.run_wachter_robust_one(x, predict_fn, shape, lam=lam_init, lam_step=10, target_proba=target_proba)
             if best_cf is None:
-                lamb = lamb / 2
-                count += 1
                 best_bound = -10000
-                best_cf = x
             else:
                 found, bound = self.is_robust_raw(x, best_cf)
                 if found == 1:
                     CEs.append(best_cf)
                     continue
                 best_bound = bound if bound is not None else -10000
-            while count <= 8 and best_cf is not None:
-                with HiddenPrints():
-                    this_cf = self.run_wachter_robust_one(x, predict_fn, shape, lamb, target_proba=prob)
-                if this_cf is None:
-                    lamb = lamb / 2
-                    count += 1
-                    continue
-                found, bound = self.is_robust_raw(x, this_cf)
-                if bound is None:
-                    lamb = lamb / 2
-                    count += 1
-                    continue
-                if found == 1:
-                    best_bound = bound
-                    best_cf = this_cf
+            probs = np.concatenate((np.arange(target_proba, 1.01, 0.1), np.array([1])))
+            found_flag = 0
+            for prob in probs:
+                lambs = [0.01, 0.05, 0.1, 0.2]
+                for lamb in lambs:
+                    this_cf = self.run_wachter_robust_one(x, predict_fn, shape, lam=lamb, lam_step=10, target_proba=prob)
+                    if this_cf is None:
+                        continue
+                    found, bound = self.is_robust_raw(x, this_cf)
+                    if bound is None:
+                        continue
+                    if bound >= best_bound:
+                        best_cf = this_cf
+                        best_bound = bound
+                        if found == 1:
+                            found_flag = 1
+                if found_flag:   # check found for at each prob, trying 4 lambs
                     break
-                if bound >= best_bound:
-                    best_bound = bound
-                    best_cf = this_cf
-                lamb = lamb / 2
-                count += 1
-            if np.sum(x - best_cf) == 0:
-                CEs.append(None)
-                continue
             CEs.append(best_cf)
 
         print("total computation time in s:", time.time() - start_time)
@@ -842,7 +804,7 @@ class UtilExp:
         assert len(CEs) == len(self.test_instances)
         return CEs
 
-    def run_wachter_robust_one(self, x, predict_fn, shape, lam=0.1, lam_step=3, target_proba=0.55):
+    def run_wachter_robust_one(self, x, predict_fn, shape, lam=0.1, lam_step=10, target_proba=0.6):
         cf = Counterfactual(predict_fn, shape, distance_fn='l1', target_proba=target_proba,
                             target_class='other', max_iter=1000, early_stop=50, lam_init=lam,
                             max_lam_steps=lam_step, tol=0.05, learning_rate_init=0.1,

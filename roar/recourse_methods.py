@@ -56,27 +56,6 @@ def counterfactual_recourse(torch_model, x, feature_costs=None, y_target=1.0, n_
     return x_new.detach().numpy()
 
 
-'''
-def actionable_recourse(x,X_train, coefficients, intercept, cost_type, feature_costs=None):
-	action_set = ActionSet(X=X_train)
-	rb = RecourseBuilder(
-		  optimizer="cplex",
-		  coefficients=coefficients,
-		  intercept=intercept,
-		  action_set=action_set,
-		  x=x,mip_cost_type=cost_type,
-		  pwfeature_costs=feature_costs
-	)
-	r = rb.fit()
-	if r['feasible']:
-		ur = x+r["actions"]
-	else:
-		ur = x
-		"Failed to find recourse"
-	return ur 
-'''
-
-
 class RobustRecourse():
     def __init__(self, W=None, W0=None, y_target=1,
                  delta_max=0.1, feature_costs=None,

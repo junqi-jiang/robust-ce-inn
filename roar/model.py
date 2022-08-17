@@ -123,7 +123,7 @@ class NN(Model):
 		class0_probs = 1-class1_probs
 		return np.hstack((class0_probs,class1_probs))
 
-	# Jay: if you want to use logistic regression in LIME, use this function instead
+	# if you want to use logistic regression in LIME, use this function instead
 	def predict_proba_01(self, X):
 		return (self.predict_proba(X) >= 0.5).astype(np.int)
 

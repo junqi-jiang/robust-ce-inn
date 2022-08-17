@@ -1,7 +1,4 @@
-"""
-Author: Junqi Jay Jiang
-Date: 20 June 2022
-"""
+
 
 from gurobipy import *
 from dataset import *

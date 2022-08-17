@@ -820,22 +820,3 @@ class UtilExp:
         proto_cf = proto_cf[0]
         return np.array(proto_cf)
 
-
-def evaluate_ces_validity_plot(util_exp, test_instances, ces, target_delta=0.05):
-    deltas = np.arange(target_delta/10, target_delta*1.01, target_delta/10)
-    delta_vals = []
-    for delta in deltas:
-        delta_val = 0
-        nodes = build_inn_nodes(util_exp.clf, util_exp.num_layers)
-        weights, biases = build_inn_weights_biases(util_exp.clf, util_exp.num_layers, delta, nodes)
-        inn_delta = Inn(util_exp.num_layers, delta, nodes, weights, biases)
-        for i, x in enumerate(test_instances):
-            if ces[i] is None:
-                continue
-            y_prime = 1 if util_exp.clf.predict(x.reshape(1, -1))[0] == 0 else 0
-            this_solver = OptSolver(util_exp.dataset, inn_delta, y_prime, x, mode=1, M=10000, x_prime=ces[i])
-            if this_solver.compute_inn_bounds()[0] == 1:
-                delta_val += 1
-        delta_vals.append(delta_val / len(test_instances))
-    return delta_vals
-

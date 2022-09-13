@@ -33,10 +33,11 @@ class Inn:
     weights: dict of {(Node in prev layer, Node in this layer), Interval}.
     biases: dict of {Node, Interval}
     """
-    def __init__(self, num_layers, delta, nodes, weights, biases):
+    def __init__(self, num_layers, delta, nodes, weights, biases, type="nn"):
         self.num_layers = num_layers
         self.delta = delta
         self.nodes = nodes
         self.weights = weights
         self.biases = biases
+        self.type = type
 

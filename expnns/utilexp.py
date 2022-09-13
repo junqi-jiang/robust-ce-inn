@@ -27,11 +27,19 @@ def get_flattened_weight_and_bias(clf, weights=True, biases=True):
     w_concat = []
     b_concat = []
     if weights:
-        w_all = clf.coefs_
-        w_concat = np.append(w_all[0].flatten(), w_all[1].flatten())
+        try:
+            w_all = clf.coefs_
+            w_concat = np.append(w_all[0].flatten(), w_all[1].flatten())
+        except:
+            w_all = [clf.coef_.transpose()]
+            w_concat = w_all[0].flatten()
     if biases:
-        b_all = clf.intercepts_
-        b_concat = np.append(b_all[0].flatten(), b_all[1].flatten())
+        try:
+            b_all = clf.intercepts_
+            b_concat = np.append(b_all[0].flatten(), b_all[1].flatten())
+        except:
+            b_all = [clf.intercept_]
+            b_concat = b_all[0].flatten()
     wb_concat = np.append(w_concat, b_concat)
     return wb_concat
 
@@ -186,14 +194,19 @@ def build_inn_nodes(clf, num_layers):
 
 
 def build_inn_weights_biases(clf, num_layers, delta, nodes):
-    ws = clf.coefs_
-    bs = clf.intercepts_
+    try:
+        ws = clf.coefs_
+    except:
+        ws = [clf.coef_.transpose()]
+    try:
+        bs = clf.intercepts_
+    except:
+        bs = [clf.intercept_]
     weights = dict()
     biases = dict()
     for i in range(num_layers - 1):
         for node_from in nodes[i]:
             for node_to in nodes[i + 1]:
-                # round by 4 decimals
                 w_val = round(ws[i][node_from.index][node_to.index], 8)
                 weights[(node_from, node_to)] = Interval(w_val, w_val - delta, w_val + delta)
                 b_val = round(bs[i][node_to.index], 8)
@@ -293,9 +306,13 @@ class HiddenPrints:
 
 class UtilExp:
     def __init__(self, clf, X1, y1, X2, y2, columns, ordinal_features, discrete_features, continuous_features,
-                 feature_var_map, gap=0.1, desired_class=1, num_test_instances=50):
+                 feature_var_map, gap=0.1, desired_class=1, num_test_instances=50, clf_type="nn"):
         self.clf = clf
-        self.num_layers = get_clf_num_layers(clf)
+        self.clf_type = clf_type
+        try:
+            self.num_layers = get_clf_num_layers(clf)
+        except:
+            self.num_layers = 2
         self.X1 = X1
         self.y1 = y1
         self.X2 = X2

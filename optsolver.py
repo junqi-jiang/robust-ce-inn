@@ -96,6 +96,8 @@ class OptSolver:
                 self.model.update()
                 # hidden layers
                 if i != (self.inn.num_layers - 1):
+                    if self.inn.num_layers == 2:
+                        continue
                     node_var[node.index] = self.model.addVar(lb=-float('inf'), vtype=GRB.CONTINUOUS,
                                                              name='n_' + str(node))
                     aux_var[node.index] = self.model.addVar(vtype=GRB.BINARY, name='a_' + str(node))

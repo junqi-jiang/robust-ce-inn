@@ -1,6 +1,6 @@
 # robust-ce-inn
 
-Codes for the paper - [Formalising the Robustness of Counterfactual Explanations for Neural Networks](https://arxiv.org/abs/2208.14878).
+Codes for the AAAI 2023 paper - [Formalising the Robustness of Counterfactual Explanations for Neural Networks](https://arxiv.org/abs/2208.14878).
 
 - /datasets: datasets used for experiments
 - /expnns: contains the scripts, utility classes, and results for experiments
